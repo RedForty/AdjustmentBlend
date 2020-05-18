@@ -9,7 +9,12 @@ To use:
 2. Add object to only ONE animation layer. We'll call this the adjustment layer.
 3. Add an adjustment to the pose on that layer on the first frame and last frame of the animation.
 4. Select the object
-5. Then run: adjustment_blend_selected()
+5. Then run the function
+
+Code here:
+import adjustment_blend    
+adjustment_blend.adjustment_blend_selected()
+
 
 '''
 # GLOBALS ------------------------------------------------------------------- #
