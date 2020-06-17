@@ -184,28 +184,30 @@ def adjustment_blend_selected():
                         if axis != current_axis[0]:
                             adjacent_attribute = attribute.split('.')[-1].replace(current_axis[0], axis)
                             new_adjacent_attribute_name = attribute.replace(attribute.split('.')[-1], adjacent_attribute)
-                            adjacent_curve = cmds.animLayer(baseAnimationLayer, q=True, findCurveForPlug=new_adjacent_attribute_name)
+                            adjacent_curve = cmds.animLayer(base_layer, q=True, findCurveForPlug=new_adjacent_attribute_name)
                             
-                            adjacent_curve_values = []
-                            for time in adjustment_range_filled:
-                                adjacent_curve_values.append(cmds.keyframe(adjacent_curve, query=True, time=(time,), eval=True, valueChange=True, absolute=True)[0])
-                            
-                            adjacent_curve_value_graph = [0.0]
-                            for i in xrange(len(adjacent_curve_values)):
-                                if i > 0:
-                                    current_value = adjacent_curve_values[i]
-                                    previous_value = adjacent_curve_values[i-1]
-                                    adjacent_curve_value_graph.append(abs(current_value - previous_value))
+                            if adjacent_curve:
+                                adjacent_curve_values = []
+                                for time in adjustment_range_filled:
+                                    value = cmds.keyframe(adjacent_curve, query=True, time=(time,), eval=True, valueChange=True, absolute=True) or []
+                                    adjacent_curve_values.extend(value)
 
-                            other_value_graphs[axis] = adjacent_curve_value_graph
+                                adjacent_curve_value_graph = [0.0]
+                                for i in xrange(len(adjacent_curve_values)):
+                                    if i > 0:
+                                        current_value = adjacent_curve_values[i]
+                                        previous_value = adjacent_curve_values[i-1]
+                                        adjacent_curve_value_graph.append(abs(current_value - previous_value))
+
+                                other_value_graphs[axis] = adjacent_curve_value_graph
                     # Add the other axis together to see if it's non-zero
 
                     added_graphs = [0.0 for x in adjustment_range_filled]
-                    for k, values in other_value_graphs.items():
+                    for _, values in other_value_graphs.items():
                         for i, value in enumerate(values):
                             added_graphs[i] += value
                     # Normalize the added graphs
-                    normalized_base_value_graph = normalize_value_graph(added_graphs)
+                    normalized_base_value_graph = normalize_values(added_graphs)
 
             if normalized_base_value_graph:
                 adjustment_curve_keys = cmds.keyframe(adjustment_curve, q=True, timeChange=True)
