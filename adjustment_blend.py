@@ -275,118 +275,118 @@ def apply_values(curve, values):
 # --------------------------------------------------------------------------- #
 # Run commands
 
+def run():
+    adjustment_layer, layers_to_process = get_layers_to_process() # Validates layer selection
+    sel = cmds.ls(sl=1) 
+    ctrl_curves_to_process = Vividict()
+    for obj in sel:
+        curves_to_process = get_curves_to_process(obj, adjustment_layer, layers_to_process)
+        ctrl_curves_to_process[obj] = curves_to_process
 
-adjustment_layer, layers_to_process = get_layers_to_process() # Validates layer selection
-sel = cmds.ls(sl=1) 
-ctrl_curves_to_process = Vividict()
-for obj in sel:
-    curves_to_process = get_curves_to_process(obj, adjustment_layer, layers_to_process)
-    ctrl_curves_to_process[obj] = curves_to_process
+    # curve_data = Vividict()
+    for obj in ctrl_curves_to_process.keys():
+        attributes_to_delete = []
+        for attribute, layers in ctrl_curves_to_process[obj].items():
+            layer_composite = []
 
-# curve_data = Vividict()
-for obj in ctrl_curves_to_process.keys():
-    attributes_to_delete = []
-    for attribute, layers in ctrl_curves_to_process[obj].items():
-        layer_composite = []
+            adjustment_curve  = layers[adjustment_layer][0]
+            adjustment_range  = get_curve_range(return_MFnAnimCurve(adjustment_curve))
+            adjustment_ranges = get_curve_ranges(return_MFnAnimCurve(adjustment_curve))
 
-        adjustment_curve  = layers[adjustment_layer][0]
-        adjustment_range  = get_curve_range(return_MFnAnimCurve(adjustment_curve))
-        adjustment_ranges = get_curve_ranges(return_MFnAnimCurve(adjustment_curve))
-
-        for layer, curve in layers.items():
-            api_curve = return_MFnAnimCurve(curve[0])
-            value_graph = get_value_graph(api_curve, adjustment_range)
-            
-            if layer == adjustment_layer:
-                if is_equal(value_graph):
-                    attributes_to_delete.append(attribute)
-                    continue
-                    
-                ctrl_curves_to_process[obj][attribute]['adjustment_curve']  = curve[0]
-                ctrl_curves_to_process[obj][attribute]['adjustment_layer']  = layer
-                ctrl_curves_to_process[obj][attribute]['adjustment_range']  = adjustment_range
-                ctrl_curves_to_process[obj][attribute]['adjustment_ranges']  = adjustment_ranges
-                ctrl_curves_to_process[obj][attribute]['adjustment_values'] = value_graph
-
-            else:    
-                velocity_graph = get_velocity_graph(value_graph)
-                layer_composite.append(velocity_graph)
-
-        # Composite the layers together
-        for i, value in enumerate(layer_composite):
-            if i != 0:
-                for x,_ in enumerate(value):
-                    layer_composite[0][x] += value[x]
-        
-        ctrl_curves_to_process[obj][attribute]['composite_velocity'] = layer_composite[0]
-        
-        # Normalize it for final consumption
-        # normalized_velocity_graph = normalize_values(layer_composite[0])
-        # ctrl_curves_to_process[obj][attribute]['composite_velocity_normalized'] = normalized_velocity_graph
-    
-    # Skip the attributes that cannot be 'adjusted'
-    for attr in attributes_to_delete:
-        del ctrl_curves_to_process[obj][attr]
-    
-
-print "Running operation on \n{}".format('\n'.join(ctrl_curves_to_process[obj].keys()))
-for obj in ctrl_curves_to_process.keys():
-    for attribute, data in ctrl_curves_to_process[obj].items():
-        adjustment_curve = data['adjustment_curve']
-        adjustment_layer = data['adjustment_layer']
-        adjustment_range = data['adjustment_range']
-        adjustment_ranges = data['adjustment_ranges']
-        adjustment_values = data['adjustment_values']
-        composite_velocity_graph  = data['composite_velocity']
-        # normalized_velocity_graph = data['composite_velocity_normalized']
-
-        if is_equal(composite_velocity_graph):
-            continue # SKIP IT for now - we don't have the clever shit installed
-
-        new_value_curve = []
-        frame_march = []
-        for frange in adjustment_ranges:
-    
-            frame_range = range(int(frange[0]), int(frange[1])+1) 
-            
-            normalized_velocity_graph = normalize_values(composite_velocity_graph[adjustment_range.index(frange[0]):adjustment_range.index(frange[1])+1])
-            
-            ''' # This begins the 'clever' shit
-            if not normalized_velocity_graph:
-                # Get neighboring axis and composite them
-                for attr in ATTRIBUTES:
-                    if attr in attribute:
-                        current_axis = attr
-                        other_axis = get_other_axis(current_axis)
-                        velocity_curve = []
-                        for axis in other_axis:
-                            new_axis = attribute.replace(current_axis, axis)
-                            values = ctrl_curves_to_process[obj][new_axis]['composite_velocity_normalized']
-                            velocity_curve.append(values)
-                        # Instead of compositing the two velocities, I should check which velocity curve is more
-                        # 'energetic' or has the biggest spikes of value change
-                        summary_velocity = [a + b for a,b in zip(velocity_curve[0],velocity_curve[-1])]
-                        normalized_velocity_graph = normalize_values(summary_velocity)
-            '''
-            # TODO: We need to implement a neighbor-based method of adjustment
-            # if not normalized_velocity_graph:
-            #     continue 
+            for layer, curve in layers.items():
+                api_curve = return_MFnAnimCurve(curve[0])
+                value_graph = get_value_graph(api_curve, adjustment_range)
                 
-            sum_percentage = 0.0
+                if layer == adjustment_layer:
+                    if is_equal(value_graph):
+                        attributes_to_delete.append(attribute)
+                        continue
+                        
+                    ctrl_curves_to_process[obj][attribute]['adjustment_curve']  = curve[0]
+                    ctrl_curves_to_process[obj][attribute]['adjustment_layer']  = layer
+                    ctrl_curves_to_process[obj][attribute]['adjustment_range']  = adjustment_range
+                    ctrl_curves_to_process[obj][attribute]['adjustment_ranges']  = adjustment_ranges
+                    ctrl_curves_to_process[obj][attribute]['adjustment_values'] = value_graph
+
+                else:    
+                    velocity_graph = get_velocity_graph(value_graph)
+                    layer_composite.append(velocity_graph)
+
+            # Composite the layers together
+            for i, value in enumerate(layer_composite):
+                if i != 0:
+                    for x,_ in enumerate(value):
+                        layer_composite[0][x] += value[x]
             
-            for index, value in enumerate(frame_range):
-                sum_percentage += normalized_velocity_graph[index]
-                new_value = map_from_to(sum_percentage, 0, 100, adjustment_values[adjustment_range.index(frange[0])], adjustment_values[adjustment_range.index(frange[1])])
-                if value not in frame_march:
-                    new_value_curve.append(new_value)
-                    frame_march.append(value) # I do this to skip the repeat frames between sets - those keys already exist anyway
-       
+            ctrl_curves_to_process[obj][attribute]['composite_velocity'] = layer_composite[0]
             
-        # Now set the keys
-        # Do the magic, DO THE MAGIC!
-        if DO_SET:
-            for index, time in enumerate(adjustment_range):
-                cmds.setKeyframe(adjustment_curve, animLayer=adjustment_layer, time=(time,), value=new_value_curve[index])
+            # Normalize it for final consumption
+            # normalized_velocity_graph = normalize_values(layer_composite[0])
+            # ctrl_curves_to_process[obj][attribute]['composite_velocity_normalized'] = normalized_velocity_graph
+        
+        # Skip the attributes that cannot be 'adjusted'
+        for attr in attributes_to_delete:
+            del ctrl_curves_to_process[obj][attr]
+        
+
+    print "Running operation on \n{}".format('\n'.join(ctrl_curves_to_process[obj].keys()))
+    for obj in ctrl_curves_to_process.keys():
+        for attribute, data in ctrl_curves_to_process[obj].items():
+            adjustment_curve = data['adjustment_curve']
+            adjustment_layer = data['adjustment_layer']
+            adjustment_range = data['adjustment_range']
+            adjustment_ranges = data['adjustment_ranges']
+            adjustment_values = data['adjustment_values']
+            composite_velocity_graph  = data['composite_velocity']
+            # normalized_velocity_graph = data['composite_velocity_normalized']
+
+            if is_equal(composite_velocity_graph):
+                continue # SKIP IT for now - we don't have the clever shit installed
+
+            new_value_curve = []
+            frame_march = []
+            for frange in adjustment_ranges:
+        
+                frame_range = range(int(frange[0]), int(frange[1])+1) 
+                
+                normalized_velocity_graph = normalize_values(composite_velocity_graph[adjustment_range.index(frange[0]):adjustment_range.index(frange[1])+1])
+                
+                ''' # This begins the 'clever' shit
+                if not normalized_velocity_graph:
+                    # Get neighboring axis and composite them
+                    for attr in ATTRIBUTES:
+                        if attr in attribute:
+                            current_axis = attr
+                            other_axis = get_other_axis(current_axis)
+                            velocity_curve = []
+                            for axis in other_axis:
+                                new_axis = attribute.replace(current_axis, axis)
+                                values = ctrl_curves_to_process[obj][new_axis]['composite_velocity_normalized']
+                                velocity_curve.append(values)
+                            # Instead of compositing the two velocities, I should check which velocity curve is more
+                            # 'energetic' or has the biggest spikes of value change
+                            summary_velocity = [a + b for a,b in zip(velocity_curve[0],velocity_curve[-1])]
+                            normalized_velocity_graph = normalize_values(summary_velocity)
+                '''
+                # TODO: We need to implement a neighbor-based method of adjustment
+                # if not normalized_velocity_graph:
+                #     continue 
+                    
+                sum_percentage = 0.0
+                
+                for index, value in enumerate(frame_range):
+                    sum_percentage += normalized_velocity_graph[index]
+                    new_value = map_from_to(sum_percentage, 0, 100, adjustment_values[adjustment_range.index(frange[0])], adjustment_values[adjustment_range.index(frange[1])])
+                    if value not in frame_march:
+                        new_value_curve.append(new_value)
+                        frame_march.append(value) # I do this to skip the repeat frames between sets - those keys already exist anyway
+           
+                
+            # Now set the keys
+            # Do the magic, DO THE MAGIC!
+            if DO_SET:
+                for index, time in enumerate(adjustment_range):
+                    cmds.setKeyframe(adjustment_curve, animLayer=adjustment_layer, time=(time,), value=new_value_curve[index])
 
 
 # --------------------------------------------------------------------------- #
@@ -425,3 +425,9 @@ def compare_curve_intensities(curve1, curve2):
     else:
         return curve2
 
+
+# --------------------------------------------------------------------------- #
+# Developer section
+
+if __name__ == '__main__':
+    run()
