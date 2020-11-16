@@ -304,11 +304,14 @@ def apply_values(curve, values):
         cmds.keyframe(curve, index=(index,), valueChange=key, absolute=True)
 
 def keywithmaxval(d): # https://stackoverflow.com/questions/268272/getting-key-with-maximum-value-in-dictionary
-     """ a) create a list of the dict's keys and values; 
-         b) return the key with the max value"""  
-     v=list(d.values())
-     k=list(d.keys())
-     return k[v.index(max(v))]
+    """ a) create a list of the dict's keys and values; 
+        b) return the key with the max value"""  
+    v=list(d.values())
+    k=list(d.keys())
+    if is_equal(v):
+        return None
+    else:
+        return k[v.index(max(v))]
      
 # --------------------------------------------------------------------------- #
 # Run commands
@@ -388,12 +391,13 @@ def run():
             adjustment_ranges = data['adjustment_ranges']
             adjustment_values = data['adjustment_values']
             composite_velocity_graph  = data['composite_velocity']
-            
+
             if not adjustment_ranges: continue # Nothing to adjust
 
             if is_equal(composite_velocity_graph):
                 # Get neighboring axis and composite them
                 redundant_keys = {}
+                sum_keys = {}
                 for attr in ATTRIBUTES:
                     if attr in attribute:
                         current_axis = attr
@@ -403,7 +407,7 @@ def run():
                             composite_velocity_graph = ctrl_curves_to_process[obj][new_axis]['composite_velocity']
 
                             if sum(composite_velocity_graph) == 0: continue # worthless flat curve
-
+                            sum_keys[new_axis] = sum(composite_velocity_graph)
                             redundants = 0.0
                             for index, value in enumerate(composite_velocity_graph):
                                 if index == 0: continue
@@ -413,8 +417,12 @@ def run():
 
                 if redundant_keys:
                     key = keywithmaxval(redundant_keys)
+                    if not key:
+                        key = keywithmaxval(sum_keys)
+                    if not key:
+                        key = redundant_keys.keys()[0]
                     composite_velocity_graph = ctrl_curves_to_process[obj][key]['composite_velocity']
-            
+
             if is_equal(composite_velocity_graph):
                 redundant_keys = {}
                 for channel in CHANNELS:
@@ -433,7 +441,6 @@ def run():
                                         composite_velocity_graph = ctrl_curves_to_process[obj][new_axis]['composite_velocity']
 
                                         if sum(composite_velocity_graph) == 0:
-                                            print axis
                                             continue # worthless flat curve
 
                                         redundants = 0.0
@@ -445,6 +452,8 @@ def run():
 
                 if redundant_keys:
                     key = keywithmaxval(redundant_keys)
+                    if not key:
+                        key = redundant_keys.keys()[0]                    
                     composite_velocity_graph = ctrl_curves_to_process[obj][key]['composite_velocity']
             
             if is_equal(composite_velocity_graph):
@@ -460,27 +469,6 @@ def run():
                 
                 normalized_velocity_graph = normalize_values(composite_velocity_graph[adjustment_range.index(frange[0]):adjustment_range.index(frange[1])+1])
                 
-                ''' # This begins the 'clever' shit
-                if not normalized_velocity_graph:
-                    # Get neighboring axis and composite them
-                    for attr in ATTRIBUTES:
-                        if attr in attribute:
-                            current_axis = attr
-                            other_axis = get_other_axis(current_axis)
-                            velocity_curve = []
-                            for axis in other_axis:
-                                new_axis = attribute.replace(current_axis, axis)
-                                values = ctrl_curves_to_process[obj][new_axis]['composite_velocity_normalized']
-                                velocity_curve.append(values)
-                            # Instead of compositing the two velocities, I should check which velocity curve is more
-                            # 'energetic' or has the biggest spikes of value change
-                            summary_velocity = [a + b for a,b in zip(velocity_curve[0],velocity_curve[-1])]
-                            normalized_velocity_graph = normalize_values(summary_velocity)
-                '''
-                # TODO: We need to implement a neighbor-based method of adjustment
-                # if not normalized_velocity_graph:
-                #     continue 
-                    
                 sum_percentage = 0.0
                 
                 for index, value in enumerate(frame_range):
@@ -489,8 +477,7 @@ def run():
                     if value not in frame_march:
                         new_value_curve.append(new_value)
                         frame_march.append(value) # I do this to skip the repeat frames between sets - those keys already exist anyway
-           
-                
+                 
             # Now set the keys
             # Do the magic, DO THE MAGIC!
             if DO_SET:
@@ -555,22 +542,10 @@ def get_peaks_valleys(curve, frange=None):
     for index in range(mcurve.numKeys):
         time = mcurve.input(index)
         value_graph_times.append(time.value)
-    
-    # linear_value_graph = []
-    # for index in range(len(frange)):
-    #     next_value = map_from_to(index, frange[0], frange[-1], first_value, last_value)
-    #     linear_value_graph.append(next_value)
 
     # Skewing to right to match left value
     value_graph_skewed = skew_curve(curve)
-    
-    # For debug
-    # new_values_keys = []
-    # for index, time in enumerate(value_graph_times):
-    #     value = value_graph_skewed[frange.index(time)]
-    #     new_values_keys.append(value)
-    
-    # apply_values('pCube1_scaleY', new_values_keys) # For debug
+
 
 def skew_values(values):
     frame_difference = len(values) - 1
