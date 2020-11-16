@@ -12,8 +12,8 @@ from maya import cmds, mel
 import maya.api.OpenMaya as om
 import maya.api.OpenMayaAnim as oma
 
-DO_SET = True
 DEBUG = False
+DO_SET = True
 ATTRIBUTES = [ 'translateX'
              , 'translateY'
              , 'translateZ'
@@ -24,6 +24,9 @@ ATTRIBUTES = [ 'translateX'
              , 'scaleY'
              , 'scaleZ'
              ]
+
+if DEBUG:
+    from pprint import pprint as pp
 
 # Helper dict will create a new key if it doesn't already exist
 class Vividict(dict):
@@ -93,7 +96,7 @@ def get_curves_to_process(obj, adjustment_layer, layers_to_process):
     if len(layer_attributes) == 1 and layer_attributes.keys() == ['BaseAnimation']:
         cmds.error("Could not find a layer membership for {}".format(obj))
         return None
-    
+     
     attribute_curves = Vividict()
     # attribute = 'pCube2.rotateY' # Helper line for debug purposes
     for attribute in clean_attributes:
@@ -124,7 +127,9 @@ def get_curves_to_process(obj, adjustment_layer, layers_to_process):
         attribute_curves.update(attribute_curve)
         
     # cmds.select(sel, replace=True)
+    if DEBUG: pp(attribute_curve)
     return attribute_curves
+    
 
 
 def return_MFnAnimCurve(curve):
@@ -216,6 +221,18 @@ def map_from_to(x,a,b,c,d):
    return y
 
 
+def remap(old_value, old_min, old_max, new_min, new_max):
+    old_range = (old_max - old_min)
+
+    if old_range == 0:
+        new_value = new_min
+    else:
+        new_range = (new_max - new_min)  
+        new_value = (((old_value - old_min) * new_range) / old_range) + new_min
+
+    return new_value
+
+
 def get_other_axis(attribute):
     ''' Takes a string, 
         Replaces the X Y or Z with a list of the other two
@@ -270,8 +287,15 @@ def get_animated_attributes(node):
 def apply_values(curve, values):
     # Do the magic, do the magic!
     for index, key in enumerate(values):
-        cmds.keyframe(curve, index=(index,), valueChange=key)
+        cmds.keyframe(curve, index=(index,), valueChange=key, absolute=True)
 
+def keywithmaxval(d): # https://stackoverflow.com/questions/268272/getting-key-with-maximum-value-in-dictionary
+     """ a) create a list of the dict's keys and values; 
+         b) return the key with the max value"""  
+     v=list(d.values())
+     k=list(d.keys())
+     return k[v.index(max(v))]
+     
 # --------------------------------------------------------------------------- #
 # Run commands
 
@@ -283,9 +307,20 @@ def run():
         curves_to_process = get_curves_to_process(obj, adjustment_layer, layers_to_process)
         ctrl_curves_to_process[obj] = curves_to_process
 
-    # curve_data = Vividict()
+
+    for obj in ctrl_curves_to_process.keys():
+        total_adjustment_range = []
+        for attribute, layers in ctrl_curves_to_process[obj].items():
+            adjustment_curve  = layers[adjustment_layer][0]
+            adjustment_range  = get_curve_range(return_MFnAnimCurve(adjustment_curve))
+            total_adjustment_range.extend(adjustment_range)
+        ctrl_curves_to_process[obj]['total_adjustment_range'] = sorted(list(set(total_adjustment_range)))
+    
+
     for obj in ctrl_curves_to_process.keys():
         attributes_to_delete = []
+        total_adjustment_range = ctrl_curves_to_process[obj]['total_adjustment_range']
+        del ctrl_curves_to_process[obj]['total_adjustment_range']
         for attribute, layers in ctrl_curves_to_process[obj].items():
             layer_composite = []
 
@@ -295,17 +330,18 @@ def run():
 
             for layer, curve in layers.items():
                 api_curve = return_MFnAnimCurve(curve[0])
-                value_graph = get_value_graph(api_curve, adjustment_range)
+                value_graph = get_value_graph(api_curve, total_adjustment_range)
                 
                 if layer == adjustment_layer:
                     if is_equal(value_graph):
+                        # If the adjustment layer is flat, nothing can be done here.
                         attributes_to_delete.append(attribute)
                         continue
                         
                     ctrl_curves_to_process[obj][attribute]['adjustment_curve']  = curve[0]
                     ctrl_curves_to_process[obj][attribute]['adjustment_layer']  = layer
                     ctrl_curves_to_process[obj][attribute]['adjustment_range']  = adjustment_range
-                    ctrl_curves_to_process[obj][attribute]['adjustment_ranges']  = adjustment_ranges
+                    ctrl_curves_to_process[obj][attribute]['adjustment_ranges'] = adjustment_ranges
                     ctrl_curves_to_process[obj][attribute]['adjustment_values'] = value_graph
 
                 else:    
@@ -325,8 +361,8 @@ def run():
             # ctrl_curves_to_process[obj][attribute]['composite_velocity_normalized'] = normalized_velocity_graph
         
         # Skip the attributes that cannot be 'adjusted'
-        for attr in attributes_to_delete:
-            del ctrl_curves_to_process[obj][attr]
+        # for attr in attributes_to_delete:
+        #     del ctrl_curves_to_process[obj][attr]
         
 
     print "Running operation on \n{}".format('\n'.join(ctrl_curves_to_process[obj].keys()))
@@ -341,7 +377,33 @@ def run():
             # normalized_velocity_graph = data['composite_velocity_normalized']
 
             if is_equal(composite_velocity_graph):
-                continue # SKIP IT for now - we don't have the clever shit installed
+                # print "Cannot find pair for {}".format(adjustment_curve)
+                # Get neighboring axis and composite them
+                redundant_keys = {}
+                for attr in ATTRIBUTES:
+                    if attr in attribute:
+                        current_axis = attr
+                        other_axis = get_other_axis(current_axis)
+                        # velocity_curves = []
+                        for axis in other_axis:
+                            new_axis = attribute.replace(current_axis, axis)
+                            composite_velocity_graph = ctrl_curves_to_process[obj][new_axis]['composite_velocity']
+                            # velocity_curves.append(composite_velocity_graph)
+                            redundants = 0.0
+                            for index, value in enumerate(composite_velocity_graph):
+                                if index == 0: continue
+                                if value == composite_velocity_graph[index - 1]:
+                                    redundants += 1
+                            redundant_keys[new_axis] = redundants
+
+                
+                key = keywithmaxval(redundant_keys)
+                composite_velocity_graph = ctrl_curves_to_process[obj][key]['composite_velocity']
+                        
+                            
+                            
+
+                # continue # SKIP IT for now - we don't have the clever shit installed
 
             new_value_curve = []
             frame_march = []
@@ -391,13 +453,168 @@ def run():
 
 # --------------------------------------------------------------------------- #
 # Bunch of dev shit here
-def get_curve_intensity(curve):
+
+def num_reversals(values):
+    reverals = []
+    begin = False
+    falling = False
     
-    num_reversals = len(get_reversals(curve))
+    for index, value in enumerate(values):
+        if index == 0: # ignore first key
+            continue 
+        
+        if value == values[index-1]: # ignore redunant keys
+            continue 
+        
+        # First direction change
+        if begin == False:
+            if value < values[index-1]:
+                reverals.append(values[index-1])
+                falling = True
+            elif value > values[index-1]:
+                reverals.append(values[index-1])
+                falling = False
+            begin = True
+            continue
+
+        if value < values[index-1] and falling == False:
+            reverals.append(values[index-1])
+            falling = True
+            # continue 
+        elif value > values[index-1] and falling == True:
+            reverals.append(values[index-1])
+            falling = False
+        continue 
+    return reverals
+        
+
+def get_peaks_valleys(curve, frange=None):
+    if isinstance(curve, str):
+        mcurve = return_MFnAnimCurve(curve)
+    elif isinstance(curve, oma.MFnAnimCurve):
+        mcurve = curve
+    else:
+        cmds.error("Could not fetch curve from {}".format(curve))
+        return None
+
+    if not frange:
+        frange = get_curve_range(mcurve)
+    
+    frame_difference = frange[-1] - frange[0]
+    frame_difference = 1 if frame_difference == 0 else frame_difference
+    
+    value_graph = get_value_graph(mcurve)
+    value_graph_times = []
+    for index in range(mcurve.numKeys):
+        time = mcurve.input(index)
+        value_graph_times.append(time.value)
+    
+    # linear_value_graph = []
+    # for index in range(len(frange)):
+    #     next_value = map_from_to(index, frange[0], frange[-1], first_value, last_value)
+    #     linear_value_graph.append(next_value)
+
+    # Skewing to right to match left value
+    value_graph_skewed = skew_curve(curve)
+    
+    # For debug
+    # new_values_keys = []
+    # for index, time in enumerate(value_graph_times):
+    #     value = value_graph_skewed[frange.index(time)]
+    #     new_values_keys.append(value)
+    
+    # apply_values('pCube1_scaleY', new_values_keys) # For debug
+
+def skew_values(values):
+    frame_difference = len(values) - 1
+    frame_difference = 1 if frame_difference == 0 else frame_difference
+    
+    offset_value = values[-1] - values[0] # The difference from first to last frame
+    
+    value_graph_skewed = []
+    for index, value in enumerate(values):
+        # frame = frange[index]
+
+        time_slope = 1 - ((index - 1) / frame_difference) # Count from 1.0 to 0.0
+        pivot_value = value - offset_value
+        # Basically, just multiply it by the offset then multiply THAT by how far down the frange we are   
+        new_value = ((value - pivot_value) * time_slope) + pivot_value 
+        
+        value_graph_skewed.append(new_value)    
+
+    return value_graph_skewed
+
+
+def skew_curve(curve, frange=None):
+    if isinstance(curve, str):
+        mcurve = return_MFnAnimCurve(curve)
+    elif isinstance(curve, oma.MFnAnimCurve):
+        mcurve = curve
+    else:
+        cmds.error("Could not fetch curve from {}".format(curve))
+        return None
+
+    if not frange:
+        frange = get_curve_range(mcurve)
+    
+    frame_difference = frange[-1] - frange[0]
+    frame_difference = 1 if frame_difference == 0 else frame_difference
+    
+    value_graph = get_value_graph(mcurve)
+    
+    first_value = mcurve.value(0)
+    last_value = mcurve.value(mcurve.numKeys - 1)
+    # offset_value = first_value - last_value # The difference from first to last frame
+    offset_value = last_value - first_value # The difference from first to last frame
+
+    value_graph_skewed = []
+    for index, value in enumerate(value_graph):
+        frame = frange[index]
+
+        time_slope = 1 - ((frame - frange[0]) / frame_difference) # Count from 1.0 to 0.0
+        pivot_value = value - offset_value
+        # Basically, just multiply it by the offset then multiply THAT by how far down the frange we are   
+        new_value = ((value - pivot_value) * time_slope) + pivot_value 
+        
+        value_graph_skewed.append(new_value)    
+
+    return value_graph_skewed
+
+def get_curve_intensity(curve):
+    if isinstance(curve, str):
+        mcurve = return_MFnAnimCurve(curve)
+    elif isinstance(curve, oma.MFnAnimCurve):
+        mcurve = curve
+    else:
+        cmds.error("Could not fetch curve from {}".format(curve))
+        return None
+    
+    curve_data = {}
+    
+    value_graph = get_value_graph(mcurve)
+    velocity_graph = get_velocity_graph(value_graph)
+    
+    value_graph_skewed = skew_curve(curve)
+    reversals = num_reversals(value_graph_skewed)
+    
+    pivot_value = value_graph_skewed[0]
+    peaks = []
+    valleys = []
+    for point in reversals:
+        if point > pivot_value:
+            peaks.append(point)
+        elif point < pivot_value:
+            valleys.append(point)
+    
+    redundants = 0.0
+    for index, value in enumerate(velocity_graph):
+        if index == 0: continue
+        if value == velocity_graph[index - 1]:
+            redundants += 1
+    
     
     # draw a straight line from beginning to end
     # Every time you get a reversal on the top side, it is a peak
-    peaks, valleys = get_peaks_valleys(curve) 
     num_peaks = len(peaks)
     num_valleys = len(valleys)
     # how big are the peaks vs valleys?
@@ -405,9 +622,21 @@ def get_curve_intensity(curve):
     lowest_value = min(valleys)
     
     # hottest moment?
-    highest_velocity = max(get_velocity_graph(curve))
+    highest_velocity = max(velocity_graph)
+    total_change = sum(velocity_graph)
 
-    return data
+    # roll it into a data set
+    curve_data['redundants']       = redundants
+    # curve_data['num_peaks']      = num_peaks
+    # curve_data['total_change']     = total_change
+    # curve_data['num_valleys']    = num_valleys
+    # curve_data['lowest_value']   = lowest_value
+    # curve_data['num_reversals']  = len(reversals)
+    # curve_data['highest_value']  = highest_value
+    curve_data['highest_velocity'] = highest_velocity
+    
+
+    return curve_data
 
 
 def compare_curve_intensities(curve1, curve2):
@@ -425,9 +654,11 @@ def compare_curve_intensities(curve1, curve2):
     else:
         return curve2
 
+# foo = compare_curve_intensities(curve1 = 'pCube1_rotateZ', curve2 = 'pCube1_rotateX')
 
 # --------------------------------------------------------------------------- #
 # Developer section
 
 if __name__ == '__main__':
     run()
+    # pass
