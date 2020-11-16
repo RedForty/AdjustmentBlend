@@ -24,6 +24,10 @@ ATTRIBUTES = [ 'translateX'
              , 'scaleY'
              , 'scaleZ'
              ]
+CHANNELS   = [ 'translate'
+             , 'rotate'
+             , 'scale'
+             ]
 
 if DEBUG:
     from pprint import pprint as pp
@@ -244,6 +248,16 @@ def get_other_axis(attribute):
     return [attribute.replace(attr[0], axis[0]), 
             attribute.replace(attr[0], axis[-1])]
 
+def get_other_channel(channel):
+    ''' Takes a string, 
+        Replaces the channel with a list of the other two
+    '''
+    # Wow this is hacky wtf I'm sorry
+    channels = ['translate', 'rotate', 'scale']
+    attr = [x for x in channels if x in channel]
+    channels.remove(attr[0])
+    return channels
+
 
 def get_animated_attributes(node):
     import maya.OpenMaya as om1
@@ -320,7 +334,7 @@ def run():
     for obj in ctrl_curves_to_process.keys():
         attributes_to_delete = []
         total_adjustment_range = ctrl_curves_to_process[obj]['total_adjustment_range']
-        del ctrl_curves_to_process[obj]['total_adjustment_range']
+        del ctrl_curves_to_process[obj]['total_adjustment_range'] # this key was just a passenger. No longer needed.
         for attribute, layers in ctrl_curves_to_process[obj].items():
             layer_composite = []
 
@@ -336,7 +350,7 @@ def run():
                     if is_equal(value_graph):
                         # If the adjustment layer is flat, nothing can be done here.
                         attributes_to_delete.append(attribute)
-                        continue
+                        # continue
                         
                     ctrl_curves_to_process[obj][attribute]['adjustment_curve']  = curve[0]
                     ctrl_curves_to_process[obj][attribute]['adjustment_layer']  = layer
@@ -374,21 +388,22 @@ def run():
             adjustment_ranges = data['adjustment_ranges']
             adjustment_values = data['adjustment_values']
             composite_velocity_graph  = data['composite_velocity']
-            # normalized_velocity_graph = data['composite_velocity_normalized']
+            
+            if not adjustment_ranges: continue # Nothing to adjust
 
             if is_equal(composite_velocity_graph):
-                # print "Cannot find pair for {}".format(adjustment_curve)
                 # Get neighboring axis and composite them
                 redundant_keys = {}
                 for attr in ATTRIBUTES:
                     if attr in attribute:
                         current_axis = attr
                         other_axis = get_other_axis(current_axis)
-                        # velocity_curves = []
                         for axis in other_axis:
                             new_axis = attribute.replace(current_axis, axis)
                             composite_velocity_graph = ctrl_curves_to_process[obj][new_axis]['composite_velocity']
-                            # velocity_curves.append(composite_velocity_graph)
+
+                            if sum(composite_velocity_graph) == 0: continue # worthless flat curve
+
                             redundants = 0.0
                             for index, value in enumerate(composite_velocity_graph):
                                 if index == 0: continue
@@ -396,13 +411,45 @@ def run():
                                     redundants += 1
                             redundant_keys[new_axis] = redundants
 
-                
-                key = keywithmaxval(redundant_keys)
-                composite_velocity_graph = ctrl_curves_to_process[obj][key]['composite_velocity']
-                        
-                            
-                            
+                if redundant_keys:
+                    key = keywithmaxval(redundant_keys)
+                    composite_velocity_graph = ctrl_curves_to_process[obj][key]['composite_velocity']
+            
+            if is_equal(composite_velocity_graph):
+                redundant_keys = {}
+                for channel in CHANNELS:
+                    if channel in attribute:
+                        current_channel = channel
+                        other_channels = get_other_channel(channel)
+                        for other_channel in other_channels:
+                            new_channel = attribute.replace(current_channel, other_channel)
+                            for attr in ATTRIBUTES:
+                                if attr in new_channel:
+                                    current_axis = attr
+                                    other_axis = get_other_axis(current_axis)
+                                    other_axis.append(current_axis)
+                                    for axis in other_axis:
+                                        new_axis = new_channel.replace(current_axis, axis)
+                                        composite_velocity_graph = ctrl_curves_to_process[obj][new_axis]['composite_velocity']
 
+                                        if sum(composite_velocity_graph) == 0:
+                                            print axis
+                                            continue # worthless flat curve
+
+                                        redundants = 0.0
+                                        for index, value in enumerate(composite_velocity_graph):
+                                            if index == 0: continue
+                                            if value == composite_velocity_graph[index - 1]:
+                                                redundants += 1
+                                        redundant_keys[new_axis] = redundants
+
+                if redundant_keys:
+                    key = keywithmaxval(redundant_keys)
+                    composite_velocity_graph = ctrl_curves_to_process[obj][key]['composite_velocity']
+            
+            if is_equal(composite_velocity_graph):
+                continue # Nothing can be done in this attribute group
+                        
                 # continue # SKIP IT for now - we don't have the clever shit installed
 
             new_value_curve = []
