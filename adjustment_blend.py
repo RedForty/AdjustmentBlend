@@ -105,6 +105,7 @@ def get_layers_to_process():
     if DEBUG:
         print('adjustment layer target is {0}.\nSummed layers are {1}\nLocked layers are {2}'.format(selected_layers[-1], layers_to_process, layers_to_remove))
 
+
     return adjustment_layer, layers_to_process
 
 
@@ -389,7 +390,7 @@ def run(smart=SMART, do_set=DO_SET):
 
     # Start by getting layers and which layer is the adjustment layer
     adjustment_layer, layers_to_process = get_layers_to_process() # Validates layer selection
-    if not adjustment_layer:
+    if not layers_to_process:
         cmds.warning("No animation layers to process. Aborting!")
         # Eject if no layers
         return None
@@ -555,7 +556,10 @@ def run(smart=SMART, do_set=DO_SET):
 
     # Working calculation range
     if not adjustment_keys:
-        cmds.error("Could not find any adjustment keys on {}".format(adjustment_layer))
+        cmds.warning("Could not find any adjustment keys on {}".format(adjustment_layer))
+        return False
+    if len(adjustment_keys) == 1:
+        cmds.warning("Could not find aenough adjustment keys on {}".format(adjustment_layer))
         return False
 
     calculation_range = get_float_range(adjustment_keys)
@@ -672,9 +676,7 @@ def run(smart=SMART, do_set=DO_SET):
 
             if not composite_graph or not adjustment_curve or not adjustment_graph:
                 if not composite_graph:
-                    # TODO: SMART SHIT
                     # Need to look at adjacent axis to borrow a composite graph.
-                    # print "Opportunity for SMARTS"
 
                     axis1, axis2 = get_other_axis(attr)
                     # print("comparing {} to {} and {}".format(attr, axis1, axis2) )
