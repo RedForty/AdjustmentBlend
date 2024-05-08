@@ -33,8 +33,8 @@ ATTRIBUTES = [ 'translateX'
 GRAPH_EDITOR = 'graphEditor1GraphEd'
 
 
-if DEBUG:
-    from pprint import pprint as pp
+# if DEBUG:
+#     from pprint import pprint as pp
 
 # Helper dict will create a new key if it doesn't already exist
 class Vividict(dict):
@@ -43,7 +43,18 @@ class Vividict(dict):
         return value
 
 
+def get_selected_animLayers():
+    '''
+    Return the names of the layers which are selected
+    '''
+    # Get selected animLayers - OLD VERSION
+    # selected_layers = cmds.treeView("AnimLayerTabanimLayerEditor", q=True, selectItem=True) or []
 
+    layers = list()
+    for each in cmds.ls(type='animLayer'):
+        if cmds.animLayer(each, query=True, selected=True):
+            layers.append(each)
+    return layers
 
 def get_layers_to_process():
     ''' Returns a list of animation layers that will be processed
@@ -52,14 +63,23 @@ def get_layers_to_process():
     all_layers = []
     root_layer = cmds.animLayer(query=True, root=True)
     if root_layer:
-        all_layers.append(root_layer)
-        all_layers.extend(cmds.animLayer(root_layer, q=True, children=True) or []) # top-down is last-to-first
+        # This doesn't work because of nested layers. Thanks maya
+        # all_layers.extend(cmds.animLayer(root_layer, q=True, children=True) or []) # top-down is last-to-first
+        # This doesn't work because the layers aren't returned in their order of addition.
+        # all_layers.append(root_layer)
+        # all_layers.extend([x for x in cmds.ls(type='animLayer') if x != root_layer])
+
+        # Is this really safe? Thanks maya
+        all_layers = cmds.treeView("AnimLayerTabanimLayerEditor", q=True, children=True)
+
     else:
         return None
 
+    # all_ls_layers = cmds.ls(type='animLayer')
 
     # Get selected animLayers
-    selected_layers = cmds.treeView("AnimLayerTabanimLayerEditor", q=True, selectItem=True) or []
+    selected_layers = get_selected_animLayers()
+
 
     layers_to_process = all_layers[:] # Copy the list
     if len(selected_layers) == 0 or selected_layers[-1] == 'BaseAnimation': # Why select base?? Treat it like selecting nothing, I guess.
@@ -73,17 +93,17 @@ def get_layers_to_process():
     adjustment_layer = selected_layers[-1]
 
     if not isinstance(layers_to_process, list): layers_to_process = [layers_to_process]
-    
+
     layers_to_remove = []
     for layer in layers_to_process:
         if cmds.animLayer(layer, q=True, lock=True):
             layers_to_remove.append(layer)
-    
+
     for layer in layers_to_remove:
         layers_to_process.remove(layer)
-    
+
     if DEBUG:
-        print 'adjustment layer target is {0}.\nSummed layers are {1}\nLocked layers are {2}'.format(selected_layers[-1], layers_to_process, layers_to_remove)
+        print('adjustment layer target is {0}.\nSummed layers are {1}\nLocked layers are {2}'.format(selected_layers[-1], layers_to_process, layers_to_remove))
 
     return adjustment_layer, layers_to_process
 
@@ -94,14 +114,14 @@ def get_attribute_curves(attribute, layer):
     '''
 
     obj, attr = attribute.split('.')
-    
+
     # Filter out non ATTRIBUTES
     if attr not in ATTRIBUTES:
         return None
-    
+
     if attribute in cmds.animLayer(layer, q=True, attribute=True) or []:
         anim_curve = cmds.animLayer(layer, q=True, findCurveForPlug=attribute) or []
-    
+
     if anim_curve:
         return {layer : anim_curve[0]}
 
@@ -163,7 +183,7 @@ def get_value_graph(mcurve, frange=None):
 
 def get_velocity_graph(values):
     velocity_graph = [0.0]
-    for i in xrange(len(values)):
+    for i in range(len(values)):
         if i > 0:
             current_value = values[i]
             previous_value = values[i-1]
@@ -172,22 +192,22 @@ def get_velocity_graph(values):
 
 def get_float_range(list_of_keys):
 
-    float_range = [x * 1.0 for x in xrange(int(min(list_of_keys)), int(max(list_of_keys))+1)]
+    float_range = [x * 1.0 for x in range(int(min(list_of_keys)), int(max(list_of_keys))+1)]
 
     set_range = set(float_range)
     set_range.update(list_of_keys)
     list_range = list(set_range)
     list_range.sort()
-    
+
     return list_range
-    
+
 def get_curve_range(mcurve):
     key_times = []
-    for key_index in xrange(int(mcurve.numKeys)):
+    for key_index in range(int(mcurve.numKeys)):
         mtime = mcurve.input(key_index) # Get (time, timeType) at keyIndex
         key_times.append(mtime.value)
 
-    int_range = [x * 1.0 for x in xrange(int(min(key_times)), int(max(key_times))+1)]
+    int_range = [x * 1.0 for x in range(int(min(key_times)), int(max(key_times))+1)]
 
     set_range = set(int_range)
     set_range.update(key_times)
@@ -198,7 +218,7 @@ def get_curve_range(mcurve):
 
 def get_curve_ranges(mcurve):
     key_times = []
-    for key_index in xrange(int(mcurve.numKeys)):
+    for key_index in range(int(mcurve.numKeys)):
         mtime = mcurve.input(key_index) # Get (time, timeType) at keyIndex
         key_times.append(mtime.value)
     range_times = []
@@ -319,7 +339,7 @@ def keywithmaxval(d): # https://stackoverflow.com/questions/268272/getting-key-w
 
 
 
-    
+
 def get_attribute_layer_curve(attribute, layer):
     """ Find the curve for the attribute on the specified layer
         If no curve is found, return the value of the attribute (assume unkeyed)
@@ -327,7 +347,7 @@ def get_attribute_layer_curve(attribute, layer):
 
     if not is_object_in_layer(attribute, layer):
         return None
-    
+
     plug = None
     if layer == cmds.animLayer(q=True, root=True):
         # For the base animation layer, traverse the chain of animBlendNodes all
@@ -347,7 +367,7 @@ def get_attribute_layer_curve(attribute, layer):
         plug = mel.eval(cmd)
         return cmds.listConnections(plug)
     # return plug
-        
+
 
 def is_object_in_layer(obj, layer):
     """ Determine if the given object is in the given animation layer.
@@ -356,7 +376,7 @@ def is_object_in_layer(obj, layer):
     if layer in object_layer_members:
         return True
     return False
-        
+
 
 
 
@@ -379,7 +399,7 @@ def run(smart=SMART, do_set=DO_SET):
                                              , attribute=True)
     members = [x.split('.')[0] for x in adjustment_layer_members]
     members = list(set(members))
-                                             
+
     if not adjustment_layer_members:
         cmds.warning("Adjustment layer {} has no members. Aborting!".format(adjustment_layer))
         # Eject if no layers
@@ -410,20 +430,20 @@ def run(smart=SMART, do_set=DO_SET):
         members = [x.split('.')[0] for x in layer_members]
         members = list(set(members))
         if not bool(set(members) & set(objects)):
-            print "Didn't find {0} in {1}.".format(members, layer)
+            print( "Didn't find {0} in {1}.".format(members, layer))
             layers_to_not_process.append(layer)
-    
+
     for layer in layers_to_not_process:
         layers_to_process.remove(layer)
 
-                    
+
 
     # Validation done... sort of
 
     # ======================================================================= #
     # BEGIN
     # ======================================================================= #
-    
+
     adjustment_keys = set()
     ctrl_curves_to_process = Vividict()
     attributes_to_skip = {}
@@ -431,26 +451,26 @@ def run(smart=SMART, do_set=DO_SET):
     attributes_to_skip["Adjustment curve has no change in values"] = []
     attributes_to_skip["Adjustment attribute was not keyed"] = []
     attributes_to_skip["Adjustment curve has no changing values below it"] = []
-    
+
     # This section will populate the dictionary like so:
-    # control 
+    # control
     # ? attribute
     #   ? animation layer
     #     ? animation curve OR static value
-    
+
     for obj in objects:
-        
+
         animated_attributes = get_animated_attributes(obj) # The API version
-        
+
         for layer in layers_to_process + [adjustment_layer]:
-            
-            for attribute in animated_attributes: 
-                
+
+            for attribute in animated_attributes:
+
                 obj, attr = attribute.split('.')
 
                 if attr not in ATTRIBUTES:
                     continue # Whitelisting attributes for now
-                
+
                 if attribute in adjustment_layer_members:
                     if layer == cmds.animLayer(q=True, root=True): # BaseAnimation is treated differently... thanks Maya
                         # Now we traverse the tree going from the top animLayer down to the base
@@ -469,15 +489,19 @@ def run(smart=SMART, do_set=DO_SET):
                             # Treat rotations differently on the base as well... thanks maya
                             if cmds.nodeType(blend_node) == 'animBlendNodeAdditiveRotation':
                                 if 'X' in attr:
-                                    ctrl_curves_to_process[obj][attr][layer] = cmds.getAttr(plug)[0][0]
+                                    plug = plug + 'X'
                                 if 'Y' in attr:
-                                    ctrl_curves_to_process[obj][attr][layer] = cmds.getAttr(plug)[0][1]
+                                    plug = plug + 'Y'
                                 if 'Z' in attr:
-                                    ctrl_curves_to_process[obj][attr][layer] = cmds.getAttr(plug)[0][2]
-                                
+                                    plug = plug + 'Z'
+                                ctrl_curves_to_process[obj][attr][layer] = cmds.listConnections(plug)
+
                             else: # Everything else is fine
                                 ctrl_curves_to_process[obj][attr][layer] = cmds.getAttr(plug)
                     else:
+                        if attribute not in cmds.animLayer(layer, q=True, attribute=True):
+                            # print layer
+                            continue
                         plug = cmds.animLayer(layer, q=True, layeredPlug=attribute)
                         curve = cmds.animLayer(layer, q=True, findCurveForPlug=attribute)
                         if curve:
@@ -485,7 +509,7 @@ def run(smart=SMART, do_set=DO_SET):
                                 keyframes = cmds.keyframe(curve, q=True) or []
                                 for key in keyframes:
                                     adjustment_keys.add(key)
-                                    
+
                                 values = cmds.keyframe(curve, q=True, valueChange=True) or []
                                 if is_equal(values):
                                     attributes_to_skip["Adjustment curve has no change in values"].append(attribute)
@@ -495,54 +519,58 @@ def run(smart=SMART, do_set=DO_SET):
                             if layer == adjustment_layer:
                                 attributes_to_skip["Adjustment attribute was not keyed"].append(attribute)
                                 continue
-                            try:
+                            # try:
+                            #     ctrl_curves_to_process[obj][attr][layer] = cmds.getAttr(plug.replace('.inputB', '.inputA'))
+                            # finally:
+                            #     cmds.error("No input found for {0} or {1}".format(attribute, plug.replace('.inputB', '.inputA')))
+                            if plug:
                                 ctrl_curves_to_process[obj][attr][layer] = cmds.getAttr(plug.replace('.inputB', '.inputA'))
-                            except:
-                                cmds.error("No input found for {0} or {1}".format(attribute, plug.replace('.inputB', '.inputA')))
-
+                            else:
+                                cmds.error("No input found for {0}".format(attribute))
+                                continue
         if not ctrl_curves_to_process[obj]: continue # Eject ghosts
 
     if not ctrl_curves_to_process: return False # How does this happen?
 
 
     # Clean out any attribute that holds no value-changing adjustment curves
-    for obj in ctrl_curves_to_process.keys():
-        for attr in ctrl_curves_to_process[obj].keys():
+    for obj in list(ctrl_curves_to_process.keys()):
+        for attr in list(ctrl_curves_to_process[obj].keys()):
             attribute = obj + '.' + attr
             if attribute in attributes_to_skip:
                 del ctrl_curves_to_process[obj][attr]
             if adjustment_layer not in ctrl_curves_to_process[obj][attr].keys():
                 del ctrl_curves_to_process[obj][attr]
-                
 
-    # At this point, we have the curve names of objects on the 
+
+    # At this point, we have the curve names of objects on the
     # adjustment layer, and keys of all the objects on this layer.
     # So we can composite adjustment ranges between these keys
-    
+
     adjustment_key_ranges = []
     adjustment_keys_sorted = sorted(adjustment_keys)
     for index, key in enumerate(adjustment_keys_sorted):
         if not index == len(adjustment_keys_sorted) - 1:
             adjustment_key_ranges.append([key, adjustment_keys_sorted[index+1]])
-    
+
     # Working calculation range
     if not adjustment_keys:
         cmds.error("Could not find any adjustment keys on {}".format(adjustment_layer))
         return False
 
     calculation_range = get_float_range(adjustment_keys)
-    
+
     # Now we need to calculate the layers_to_process between these ranges
     # We can query all curves between these ranges to get value graphs
     # If we don't find a curve (no key on BaseAnimation for example), we can grab the flat value
-    
+
     for obj in ctrl_curves_to_process.keys():
-        
+
         # get_rotates    = False
         # get_translates = False
-        
+
         for attr in ctrl_curves_to_process[obj].keys():
-            
+
             # if smart:
             #     if 'rotate' in attr:
             #         get_rotates = True
@@ -551,13 +579,13 @@ def run(smart=SMART, do_set=DO_SET):
 
             for layer, destination in ctrl_curves_to_process[obj][attr].items():
 
-                if not isinstance(destination, list): 
+                if not isinstance(destination, list):
                     destination = ctrl_curves_to_process[obj][attr][layer] = [destination]
 
                 if isinstance(destination[0], float):
                     float_range = [destination[0] for x in calculation_range]
 
-                elif isinstance(destination[0], unicode):
+                elif isinstance(destination[0], str):
                     float_range = []
                     for time in calculation_range:
                         value = cmds.keyframe(destination[0], q=True, valueChange=True, eval=True, time=(time,))[0]
@@ -569,42 +597,42 @@ def run(smart=SMART, do_set=DO_SET):
 
                 if layer == adjustment_layer and is_equal(float_range):
                     # Constant values are irrelevant
-                    print "Deleting {0}.{1}".format(obj, attr)
+                    print( "Deleting {0}.{1}".format(obj, attr))
                     del ctrl_curves_to_process[obj][attr]
                     continue
-                    
+
                 ctrl_curves_to_process[obj][attr][layer].append(float_range)
-    
-    
+
+
     # ======================================================================= #
     # Begin calculation of the curve data
 
     value_graphs = Vividict()
-    
+
     for obj in ctrl_curves_to_process.keys():
 
         for attr in ctrl_curves_to_process[obj].keys():
-            
+
             composite_velocity_graphs = []
-            
+
             for layer, destination in ctrl_curves_to_process[obj][attr].items():
 
                 if isinstance(destination[0], float):
                     continue
 
-                elif isinstance(destination[0], unicode):
+                elif isinstance(destination[0], str):
                     api_curve = return_MFnAnimCurve(destination[0])
                     value_graph = get_value_graph(api_curve, calculation_range)
 
                     if is_equal(value_graph):
                         continue # Constant values are irrelevant
-  
+
                     if layer == adjustment_layer:
                         value_graphs[obj][attr]['adjustment_graph'] = value_graph
                         value_graphs[obj][attr]['adjustment_curve'] = destination[0]
                     else:
                         composite_velocity_graphs.append(get_velocity_graph(value_graph))
-            
+
             if composite_velocity_graphs:
                 for graph in composite_velocity_graphs:
                     for i, value in enumerate(composite_velocity_graphs):
@@ -618,19 +646,19 @@ def run(smart=SMART, do_set=DO_SET):
                     try: # Gotta figure this out when it comes to SMARTS
                         del value_graphs[obj][attr]
                     except: pass
-                
+
     adjustment_range = range(int(adjustment_key_ranges[0][0]), int(adjustment_key_ranges[-1][-1])+1)
-    
+
     if DEBUG:
         any_values = bool(len(['' for x in attributes_to_skip.values() if x]))
         if any_values:
             cmds.warning("Ejected the following attributes:")
         for reason in attributes_to_skip.keys():
             if attributes_to_skip[reason]:
-                print "# " + reason
+                print( "# " + reason)
                 for attr in attributes_to_skip[reason]:
-                    print "  - " + attr
-        
+                    print( "  - " + attr)
+
     for obj in value_graphs.keys():
         # Just in case this was sanitized earlier
         if not value_graphs[obj].keys():
@@ -638,27 +666,61 @@ def run(smart=SMART, do_set=DO_SET):
             continue
 
         for attr in value_graphs[obj].keys():
-
             adjustment_curve = value_graphs[obj][attr]['adjustment_curve']
             adjustment_graph = value_graphs[obj][attr]['adjustment_graph']
             composite_graph  = value_graphs[obj][attr]['composite_graph']
-            
+
             if not composite_graph or not adjustment_curve or not adjustment_graph:
-            # if not composite_graph:
-                # TODO: SMART SHIT
-                # Need to look at adjacent axis to borrow a composite graph.
-                # print "Opportunity for SMARTS"
-                continue
+                if not composite_graph:
+                    # TODO: SMART SHIT
+                    # Need to look at adjacent axis to borrow a composite graph.
+                    # print "Opportunity for SMARTS"
+
+                    axis1, axis2 = get_other_axis(attr)
+                    # print("comparing {} to {} and {}".format(attr, axis1, axis2) )
+                    # print(value_graphs[obj][axis1]['composite_graph'])
+                    # print(value_graphs[obj][axis2]['composite_graph'])
+
+                    axis1compare = value_graphs[obj][axis1]['adjustment_curve']
+                    axis2compare = value_graphs[obj][axis2]['adjustment_curve']
+                    highest_intensity_curve = compare_curve_intensities(axis1compare, axis2compare)
+
+                    if highest_intensity_curve == value_graphs[obj][axis1]['adjustment_curve']:
+                        # print("substituting {0} for {1}".format(attr, axis1))
+                        composite_graph = value_graphs[obj][axis1]['composite_graph']
+                    elif highest_intensity_curve == value_graphs[obj][axis2]['adjustment_curve']:
+                        composite_graph = value_graphs[obj][axis2]['composite_graph']
+                        # print("substituting {0} for {1}".format(attr, axis2))
+                    if not composite_graph:
+                        # Looks like no suitable composite graph was found. Extending search to other channel (ie, rotate to translate).
+                        # print("Attr {} has failed at finding a suitable composite graph.".format(attr))
+
+                        # channel1, channel2 = get_other_channel(attr)
+                        composite_graph_compare = Vividict()
+                        for channel in get_other_channel(attr):
+                            for axis in ['X', 'Y', 'Z']:
+                                if channel+axis in value_graphs[obj].keys():
+                                    values = value_graphs[obj][channel+axis]['composite_graph']
+                                    composite_graph_compare[channel+axis] = max(get_velocity_graph(values))
+
+                        hottest = keywithmaxval(composite_graph_compare)
+                        if hottest:
+                            # print("found hottest channel as {}".format(hottest))
+                            composite_graph = value_graphs[obj][hottest]['composite_graph']
+                            # print("hottest composite graph is {}".format(composite_graph))
+                            print("substituting {0} for {1}".format(attr, hottest))
+                # continue
 
             new_value_curve = []
             frame_march = []
-            
+
             for frange in adjustment_key_ranges:
+
 
                 frame_range = range(int(frange[0]), int(frange[1])+1)
 
                 normalized_velocity_graph = normalize_values(composite_graph[calculation_range.index(frange[0]):calculation_range.index(frange[1])+1])
-                
+
                 # if is_equal(normalized_velocity_graph): continue # How did this end up here?
 
                 sum_percentage = 0.0
@@ -677,7 +739,7 @@ def run(smart=SMART, do_set=DO_SET):
                 #     print "Running adjustment on {}.".format(adjustment_curve)
                 for index, time in enumerate(adjustment_range):
                     cmds.setKeyframe(adjustment_curve, animLayer=adjustment_layer, time=(time,), value=new_value_curve[index])
-    
+
     if DEBUG:
         # To check whether the dict has any non-zero length value in it (returns True or False):
         any_values = bool(len(['' for x in value_graphs.values() if x]))
@@ -685,7 +747,7 @@ def run(smart=SMART, do_set=DO_SET):
             cmds.warning("Executing adjustment of the following attributes:")
         for obj, attr in value_graphs.items():
             for at in attr:
-                print "  + " + obj + '.' + at
+                print( "  + " + obj + '.' + at)
 
     if not do_set:
         cmds.warning("Skipped do_set. Hopefully you have DEBUG on?")
@@ -810,6 +872,8 @@ def skew_curve(curve, frange=None):
     return value_graph_skewed
 
 def get_curve_intensity(curve):
+    # print("getting curve intensity of {}".format(curve))
+
     if isinstance(curve, str):
         mcurve = return_MFnAnimCurve(curve)
     elif isinstance(curve, oma.MFnAnimCurve):
@@ -829,26 +893,27 @@ def get_curve_intensity(curve):
     pivot_value = value_graph_skewed[0]
     peaks = []
     valleys = []
-    for point in reversals:
-        if point > pivot_value:
-            peaks.append(point)
-        elif point < pivot_value:
-            valleys.append(point)
-
     redundants = 0.0
-    for index, value in enumerate(velocity_graph):
-        if index == 0: continue
-        if value == velocity_graph[index - 1]:
-            redundants += 1
+    if peaks and valleys:
+        for point in reversals:
+            if point > pivot_value:
+                peaks.append(point)
+            elif point < pivot_value:
+                valleys.append(point)
+
+        for index, value in enumerate(velocity_graph):
+            if index == 0: continue
+            if value == velocity_graph[index - 1]:
+                redundants += 1
 
 
-    # draw a straight line from beginning to end
-    # Every time you get a reversal on the top side, it is a peak
-    num_peaks = len(peaks)
-    num_valleys = len(valleys)
-    # how big are the peaks vs valleys?
-    highest_value = max(peaks)
-    lowest_value = min(valleys)
+        # draw a straight line from beginning to end
+        # Every time you get a reversal on the top side, it is a peak
+        num_peaks = len(peaks)
+        num_valleys = len(valleys)
+        # how big are the peaks vs valleys?
+        highest_value = max(peaks)
+        lowest_value = min(valleys)
 
     # hottest moment?
     highest_velocity = max(velocity_graph)
@@ -857,7 +922,7 @@ def get_curve_intensity(curve):
     # roll it into a data set
     curve_data['redundants']       = redundants
     # curve_data['num_peaks']      = num_peaks
-    # curve_data['total_change']     = total_change
+    # curve_data['total_change']   = total_change
     # curve_data['num_valleys']    = num_valleys
     # curve_data['lowest_value']   = lowest_value
     # curve_data['num_reversals']  = len(reversals)
@@ -868,22 +933,28 @@ def get_curve_intensity(curve):
     return curve_data
 
 
+def compare_graph_intensities(graph1, graph2):
+    data1 = max(get_velocity_graph(graph1))
+    data2 = max(get_velocity_graph(graph2))
+    if data1 > data2:
+        return data1
+    elif data1 < data2:
+        return data2
+    else:
+        return None
+
 def compare_curve_intensities(curve1, curve2):
     # Counts the number of signals data1 beats over data2
     # Returns the winning curve
     data1 = get_curve_intensity(curve1)
     data2 = get_curve_intensity(curve2)
+    # winner = max(data1['highest_velocity'], data2['highest_velocity'])
 
-    data1_winnings = []
-    for k in data1.keys():
-        data1_winner = data1[k] > data2[k]
-        data1_winnings.append(data1_winner)
-    if data1_winnings.count(True) > data1_winnings.count(False):
+    if data1["highest_velocity"] > data2["highest_velocity"]:
         return curve1
     else:
         return curve2
 
-# foo = compare_curve_intensities(curve1 = 'pCube1_rotateZ', curve2 = 'pCube1_rotateX')
 
 def get_selected_curves():
     # get the key selection
@@ -920,5 +991,6 @@ def get_curve_data():
 # Developer section
 
 if __name__ == '__main__':
-    run()
+    print("# " + 76*"=" + " #\n") # Divider
+    run(smart=True, do_set=True)
     # pass
