@@ -726,10 +726,19 @@ def run(smart=SMART, do_set=DO_SET):
                 # if is_equal(normalized_velocity_graph): continue # How did this end up here?
 
                 sum_percentage = 0.0
+                new_value = 0.0
 
                 for index, value in enumerate(frame_range):
                     sum_percentage += normalized_velocity_graph[index]
-                    new_value = map_from_to(sum_percentage, 0, 100, adjustment_graph[calculation_range.index(frange[0])], adjustment_graph[calculation_range.index(frange[1])])
+                    try:
+                        new_value = map_from_to(sum_percentage, 0, 100, adjustment_graph[calculation_range.index(frange[0])], adjustment_graph[calculation_range.index(frange[1])])
+                    except TypeError:
+                        if DEBUG:
+                            print("frange = {}".format(frange))
+                            print("sum_percentage = {}".format(sum_percentage))
+                            print("adjustment_graph = {}".format(adjustment_graph))
+                            print("adjustment_graph_frange0 = {}".format(adjustment_graph[calculation_range.index(frange[0])]))
+                            print("adjustment_graph_frange1 = {}".format(adjustment_graph[calculation_range.index(frange[1])]))
                     if value not in frame_march:
                         new_value_curve.append(new_value)
                         frame_march.append(value) # I do this to skip the repeat frames between sets - those keys already exist anyway
@@ -739,9 +748,14 @@ def run(smart=SMART, do_set=DO_SET):
             if do_set:
                 # if DEBUG:
                 #     print "Running adjustment on {}.".format(adjustment_curve)
-                for index, time in enumerate(adjustment_range):
-                    cmds.setKeyframe(adjustment_curve, animLayer=adjustment_layer, time=(time,), value=new_value_curve[index])
-
+                try:
+                    for index, time in enumerate(adjustment_range):
+                        cmds.setKeyframe(adjustment_curve, animLayer=adjustment_layer, time=(time,), value=new_value_curve[index])
+                except:
+                    if DEBUG:
+                        print("adjustment_curve = {}".format(adjustment_curve))
+                        print("adjustment_layer = {}".format(adjustment_layer))
+                        print("new_value_curve[index] = {}".format(new_value_curve[index]))
     if DEBUG:
         # To check whether the dict has any non-zero length value in it (returns True or False):
         any_values = bool(len(['' for x in value_graphs.values() if x]))
