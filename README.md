@@ -11,5 +11,5 @@ Place adjustment_blend.py in your scripts folder.
 
 ##
     import adjustment_blend
-    adjustment_blend.adjustment_blend_selected()
+    adjustment_blend.run(smart=True)
 
