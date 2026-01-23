@@ -913,10 +913,14 @@ def _find_axis_fallback_from_stack(
         key=lambda c: abs(c[2] - adjustment_delta)
     )
 
+    # Log all candidates for debugging
+    candidate_info = ", ".join(
+        f"{c[0]}={c[2]:.2f} (diff={abs(c[2] - adjustment_delta):.2f})"
+        for c in candidates
+    )
     log.debug(
         f"Axis fallback for {attr_data.attr}: adjustment_delta={adjustment_delta:.2f}, "
-        f"chose {best_candidate[0]} (delta={best_candidate[2]:.2f}) over "
-        f"{[c[0] for c in candidates if c[0] != best_candidate[0]]}"
+        f"candidates: [{candidate_info}], chose {best_candidate[0]}"
     )
 
     return best_candidate[1], best_candidate[0]
