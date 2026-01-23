@@ -866,18 +866,20 @@ def _find_axis_fallback_from_stack(
 
     Priority: translateX -> translateY, translateZ (same channel first!)
 
-    Uses a heuristic to pick the best axis: choose the one whose total
-    motion delta is closest to the adjustment curve's delta. This makes
-    artistic sense - a stride motion (translateZ) is more related to a
-    horizontal adjustment (translateX) than a small up/down bobble (translateY).
+    Uses a heuristic to pick the best axis: choose the one whose net delta
+    (end value - start value) is closest to the adjustment curve's delta.
+    This makes artistic sense - a stride motion (translateZ) going from
+    0 to 50 is more related to a horizontal adjustment going 0 to 45 than
+    an up/down bobble that ends where it started.
 
     Returns:
         (velocity_list, source_attr) or (None, None) if not found
     """
     other_axes = get_other_axis(attr_data.attr)
 
-    # Calculate the adjustment curve's total delta (how much it changes)
-    adjustment_delta = sum(get_velocity_graph(attr_data.adjustment_values))
+    # Calculate the adjustment curve's net delta (end - start, not total motion)
+    adj_values = attr_data.adjustment_values
+    adjustment_delta = abs(adj_values[-1] - adj_values[0])
 
     # Collect candidates with their velocities and deltas
     candidates = []
@@ -885,19 +887,23 @@ def _find_axis_fallback_from_stack(
     for other_attr in other_axes:
         key = f"{attr_data.obj}.{other_attr}"
         velocity = None
+        composite_values = None
 
         # First, check if this attr is on the adjustment layer with valid velocity
         if key in lookup and lookup[key].has_valid_velocity():
             velocity = lookup[key].composite_velocity[:]
+            # Need to get the composite values to calculate net delta
+            if stack.ensure_contribution(other_attr):
+                composite_values = stack.get_base_values(other_attr, calculation_range)
         else:
             # Use LayerStack to get composite values for this attribute
             if stack.ensure_contribution(other_attr):
                 composite_values = stack.get_base_values(other_attr, calculation_range)
                 velocity = get_velocity_graph(composite_values)
 
-        if velocity and not is_equal(velocity):
-            # Calculate total delta for this candidate
-            candidate_delta = sum(velocity)
+        if velocity and not is_equal(velocity) and composite_values:
+            # Calculate net delta (end - start) for this candidate
+            candidate_delta = abs(composite_values[-1] - composite_values[0])
             candidates.append((other_attr, velocity, candidate_delta))
 
     if not candidates:
