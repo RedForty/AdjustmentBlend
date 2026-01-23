@@ -1,43 +1,103 @@
-# Get selected animlayers
-# Top one is the adjustment layer
-# sum the curves from the lower layers
+"""
+Adjustment Blend - Velocity-matched keyframe interpolation for Maya animation layers.
 
-# if no selection, the top layer is the adjustment layer
-# it will sum all layers below it
+This tool generates keyframes between sparse keyframes on adjustment layers,
+matching the rate-of-change (velocity) from the layers below instead of using
+linear or bezier interpolation.
 
-# It is assuming all layers involved with the selection are additive
-# TODO: properly validate/calculate curves that are override
+Based on Dan Low's GDC talk on animation blending.
+
+Architecture:
+    1. gather_context() - Identifies layers, objects, and frame ranges
+    2. collect_attribute_data() - Uses animLib.LayerStack for composite values
+    3. calculate_adjustment_values() - Distributes values by velocity
+    4. apply_keyframes() - Writes keyframes to Maya
+
+Author: Daniel Klug
+"""
+
+from dataclasses import dataclass, field
+from typing import Optional, List, Dict, Set
+import logging
 
 from maya import cmds, mel
 import maya.api.OpenMaya as om
 import maya.api.OpenMayaAnim as oma
 
-DO_SET     = True
-SMART      = False
-DEBUG      = True
+# Import animLib for LayerStack functionality
+import animLib
 
-CHANNELS   = [ 'translate'
-             , 'rotate'
-             , 'scale'
-             ]
-ATTRIBUTES = [ 'translateX'
-             , 'translateY'
-             , 'translateZ'
-             , 'rotateX'
-             , 'rotateY'
-             , 'rotateZ'
-             , 'scaleX'
-             , 'scaleY'
-             , 'scaleZ'
-             ]
+# =============================================================================
+# Configuration
+# =============================================================================
+
+DO_SET = True
+SMART = False
+DEBUG = True
+
+CHANNELS = ['translate', 'rotate', 'scale']
+ATTRIBUTES = [
+    'translateX', 'translateY', 'translateZ',
+    'rotateX', 'rotateY', 'rotateZ',
+    'scaleX', 'scaleY', 'scaleZ',
+]
 GRAPH_EDITOR = 'graphEditor1GraphEd'
 
+# Logging setup
+logging.basicConfig()
+log = logging.getLogger(__name__)
+log.setLevel(logging.DEBUG if DEBUG else logging.WARNING)
 
-# if DEBUG:
-#     from pprint import pprint as pp
 
-# Helper dict will create a new key if it doesn't already exist
+# =============================================================================
+# Data Classes
+# =============================================================================
+
+@dataclass
+class AdjustmentContext:
+    """
+    Context for an adjustment blend operation.
+
+    Contains all the "what to process" information gathered at the start.
+    """
+    adjustment_layer: str
+    layers_to_process: List[str]
+    objects: List[str]
+    adjustment_keys: List[float]
+    adjustment_key_ranges: List[tuple]  # [(start, end), ...]
+    calculation_range: List[float]  # All frames to evaluate
+
+
+@dataclass
+class AttributeData:
+    """
+    Data for a single object.attribute being processed.
+
+    This replaces the nested Vividict dictionary with explicit, typed fields.
+    """
+    obj: str
+    attr: str
+    adjustment_curve: str
+    adjustment_values: List[float]  # Values at each frame in calculation_range
+    composite_velocity: List[float]  # Velocity graph from layers below
+
+    # Fallback tracking (for smart mode)
+    velocity_source: str = ""  # Which attr the velocity came from (for debugging)
+
+    @property
+    def full_attr(self) -> str:
+        return f"{self.obj}.{self.attr}"
+
+    def has_valid_velocity(self) -> bool:
+        """Check if the composite velocity has any motion."""
+        if not self.composite_velocity:
+            return False
+        return not is_equal(self.composite_velocity)
+
+
+# Legacy helper - kept for compatibility with existing code
 class Vividict(dict):
+    """Auto-vivifying dictionary. DEPRECATED - use data classes instead."""
     def __missing__(self, key):
         value = self[key] = type(self)()
         return value
@@ -382,8 +442,493 @@ def is_object_in_layer(obj, layer):
 
 
 
-# ---------------------------------------------------------------------------- #
-# Run commands
+# =============================================================================
+# Pipeline Stage 1: Gather Context
+# =============================================================================
+
+def gather_context(objects: Optional[List[str]] = None) -> Optional[AdjustmentContext]:
+    """
+    Gather all context needed for adjustment blend operation.
+
+    This is the first pipeline stage - it validates the scene state and
+    returns a context object with all the "what to process" information.
+
+    Args:
+        objects: Optional list of objects to process. If None, uses selection
+                 or adjustment layer members.
+
+    Returns:
+        AdjustmentContext if valid, None if validation fails.
+    """
+    # Get layer configuration
+    layer_result = get_layers_to_process()
+    if not layer_result:
+        cmds.warning("No animation layers to process. Aborting!")
+        return None
+
+    adjustment_layer, layers_to_process = layer_result
+
+    if not layers_to_process:
+        cmds.warning("No animation layers below adjustment layer to process. Aborting!")
+        return None
+
+    # Get adjustment layer members
+    adjustment_layer_members = cmds.animLayer(adjustment_layer, q=True, attribute=True) or []
+    if not adjustment_layer_members:
+        cmds.warning(f"Adjustment layer {adjustment_layer} has no members. Aborting!")
+        return None
+
+    members = list(set(x.split('.')[0] for x in adjustment_layer_members))
+
+    # Determine objects to process
+    if objects is None:
+        objects = cmds.ls(sl=1) or []
+
+    if not objects:
+        cmds.warning(f"No object selected. Fetching members of {adjustment_layer} instead.")
+        objects = members
+    else:
+        # Validate selected objects are in adjustment layer
+        if not bool(set(members) & set(objects)):
+            cmds.warning("No selected objects exist in the selected adjustment layer!")
+            return None
+
+    if not objects:
+        cmds.warning(f"{adjustment_layer} contains no controls. Aborting!")
+        return None
+
+    # Filter layers that don't contain our objects
+    layers_to_process = _filter_layers_by_objects(layers_to_process, objects)
+
+    # Collect all adjustment keys from the adjustment layer
+    adjustment_keys = _collect_adjustment_keys(objects, adjustment_layer, adjustment_layer_members)
+
+    if not adjustment_keys:
+        cmds.warning(f"Could not find any adjustment keys on {adjustment_layer}")
+        return None
+
+    if len(adjustment_keys) < 2:
+        cmds.warning(f"Need at least 2 adjustment keys on {adjustment_layer}")
+        return None
+
+    # Build key ranges (segments between keys)
+    adjustment_keys_sorted = sorted(adjustment_keys)
+    adjustment_key_ranges = [
+        (adjustment_keys_sorted[i], adjustment_keys_sorted[i + 1])
+        for i in range(len(adjustment_keys_sorted) - 1)
+    ]
+
+    # Build calculation range (all frames to evaluate)
+    calculation_range = get_float_range(list(adjustment_keys))
+
+    if DEBUG:
+        log.debug(f"Adjustment layer: {adjustment_layer}")
+        log.debug(f"Layers to process: {layers_to_process}")
+        log.debug(f"Objects: {objects}")
+        log.debug(f"Key ranges: {adjustment_key_ranges}")
+
+    return AdjustmentContext(
+        adjustment_layer=adjustment_layer,
+        layers_to_process=layers_to_process,
+        objects=objects,
+        adjustment_keys=adjustment_keys_sorted,
+        adjustment_key_ranges=adjustment_key_ranges,
+        calculation_range=calculation_range,
+    )
+
+
+def _filter_layers_by_objects(layers: List[str], objects: List[str]) -> List[str]:
+    """Remove layers that don't contain any of the target objects."""
+    root_layer = cmds.animLayer(q=True, root=True)
+    filtered = []
+
+    for layer in layers:
+        if layer == root_layer:
+            filtered.append(layer)
+            continue
+
+        layer_members = cmds.animLayer(layer, q=True, attribute=True) or []
+        layer_objects = set(x.split('.')[0] for x in layer_members)
+
+        if bool(layer_objects & set(objects)):
+            filtered.append(layer)
+        else:
+            log.debug(f"Skipping layer {layer} - no target objects")
+
+    return filtered
+
+
+def _collect_adjustment_keys(
+    objects: List[str],
+    adjustment_layer: str,
+    adjustment_layer_members: List[str]
+) -> Set[float]:
+    """Collect all keyframe times from adjustment layer for target objects."""
+    adjustment_keys = set()
+
+    for obj in objects:
+        animated_attributes = get_animated_attributes(obj)
+
+        for attribute in animated_attributes:
+            obj_name, attr = attribute.split('.')
+            if attr not in ATTRIBUTES:
+                continue
+
+            if attribute not in adjustment_layer_members:
+                continue
+
+            curve = cmds.animLayer(adjustment_layer, q=True, findCurveForPlug=attribute)
+            if curve:
+                keyframes = cmds.keyframe(curve, q=True) or []
+                adjustment_keys.update(keyframes)
+
+    return adjustment_keys
+
+
+# =============================================================================
+# Pipeline Stage 2: Collect Attribute Data (using animLib.LayerStack)
+# =============================================================================
+
+def collect_attribute_data(context: AdjustmentContext) -> List[AttributeData]:
+    """
+    Collect attribute data using animLib.LayerStack for composite values.
+
+    This is the key integration point with animLib - instead of manually
+    traversing blend nodes, we use LayerStack.get_base_values() to get
+    the composite values from all layers below the adjustment layer.
+
+    Args:
+        context: The adjustment context from gather_context()
+
+    Returns:
+        List of AttributeData objects ready for velocity calculation.
+    """
+    attribute_data_list = []
+    skipped = {
+        "no_adjustment_curve": [],
+        "flat_adjustment": [],
+        "no_composite_velocity": [],
+    }
+
+    adjustment_layer_members = set(
+        cmds.animLayer(context.adjustment_layer, q=True, attribute=True) or []
+    )
+
+    for obj in context.objects:
+        # Build LayerStack for this object - this is the animLib integration!
+        # The LayerStack knows how to traverse blend nodes and get composite values
+        try:
+            stack = animLib.LayerStack.build(obj, context.adjustment_layer)
+        except Exception as e:
+            log.warning(f"Could not build LayerStack for {obj}: {e}")
+            continue
+
+        animated_attributes = get_animated_attributes(obj)
+
+        for attribute in animated_attributes:
+            _, attr = attribute.split('.')
+
+            if attr not in ATTRIBUTES:
+                continue
+
+            if attribute not in adjustment_layer_members:
+                continue
+
+            # Get the adjustment curve
+            curve = cmds.animLayer(
+                context.adjustment_layer, q=True, findCurveForPlug=attribute
+            )
+            if not curve:
+                skipped["no_adjustment_curve"].append(attribute)
+                continue
+
+            curve = curve[0] if isinstance(curve, list) else curve
+
+            # Get adjustment values at each frame
+            adjustment_values = []
+            for t in context.calculation_range:
+                value = cmds.keyframe(curve, q=True, valueChange=True, eval=True, time=(t,))
+                adjustment_values.append(value[0] if value else 0.0)
+
+            # Skip if adjustment curve is flat
+            if is_equal(adjustment_values):
+                skipped["flat_adjustment"].append(attribute)
+                continue
+
+            # Get composite values from layers below using LayerStack
+            # This replaces the manual blend node traversal!
+            composite_values = stack.get_base_values(attr, context.calculation_range)
+
+            # Calculate velocity from composite values
+            composite_velocity = get_velocity_graph(composite_values)
+
+            attr_data = AttributeData(
+                obj=obj,
+                attr=attr,
+                adjustment_curve=curve,
+                adjustment_values=adjustment_values,
+                composite_velocity=composite_velocity,
+                velocity_source=attr,
+            )
+
+            if not attr_data.has_valid_velocity():
+                skipped["no_composite_velocity"].append(attribute)
+                # Still add it - we might find a fallback in smart mode
+                # The velocity will be filled in by apply_smart_fallbacks()
+
+            attribute_data_list.append(attr_data)
+
+    if DEBUG:
+        for reason, attrs in skipped.items():
+            if attrs:
+                log.debug(f"Skipped ({reason}): {attrs}")
+
+    return attribute_data_list
+
+
+# =============================================================================
+# Pipeline Stage 3: Calculate Adjustment Values
+# =============================================================================
+
+def calculate_adjustment_values(
+    attr_data: AttributeData,
+    context: AdjustmentContext
+) -> List[float]:
+    """
+    Calculate new keyframe values for an attribute based on velocity distribution.
+
+    This is the core algorithm: instead of linear interpolation between
+    adjustment keyframes, we distribute the value change according to
+    where motion is happening in the layers below.
+
+    Args:
+        attr_data: The attribute data with velocity information
+        context: The adjustment context
+
+    Returns:
+        List of new values for each frame in the adjustment range.
+    """
+    new_values = []
+    frame_march = set()
+
+    for start_frame, end_frame in context.adjustment_key_ranges:
+        frame_range = range(int(start_frame), int(end_frame) + 1)
+
+        # Get the velocity slice for this range
+        start_idx = context.calculation_range.index(start_frame)
+        end_idx = context.calculation_range.index(end_frame) + 1
+        velocity_slice = attr_data.composite_velocity[start_idx:end_idx]
+
+        # Normalize velocity to 0-100%
+        normalized_velocity = normalize_values(velocity_slice)
+
+        # Get adjustment values at start and end of range
+        adj_start = attr_data.adjustment_values[start_idx]
+        adj_end = attr_data.adjustment_values[end_idx - 1]
+
+        # Accumulate velocity and map to adjustment value range
+        sum_percentage = 0.0
+
+        for i, frame in enumerate(frame_range):
+            sum_percentage += normalized_velocity[i]
+
+            try:
+                new_value = map_from_to(sum_percentage, 0, 100, adj_start, adj_end)
+            except (TypeError, ZeroDivisionError):
+                new_value = adj_start
+
+            # Skip duplicate frames between ranges
+            if frame not in frame_march:
+                new_values.append(new_value)
+                frame_march.add(frame)
+
+    return new_values
+
+
+# =============================================================================
+# Pipeline Stage 4: Apply Keyframes
+# =============================================================================
+
+def apply_keyframes(
+    attr_data: AttributeData,
+    new_values: List[float],
+    context: AdjustmentContext
+) -> bool:
+    """
+    Apply calculated keyframe values to the adjustment curve.
+
+    Args:
+        attr_data: The attribute data
+        new_values: The new values to apply
+        context: The adjustment context
+
+    Returns:
+        True if successful, False otherwise.
+    """
+    adjustment_range = range(
+        int(context.adjustment_key_ranges[0][0]),
+        int(context.adjustment_key_ranges[-1][1]) + 1
+    )
+
+    try:
+        for i, frame in enumerate(adjustment_range):
+            if i >= len(new_values):
+                break
+            cmds.setKeyframe(
+                attr_data.adjustment_curve,
+                animLayer=context.adjustment_layer,
+                time=(frame,),
+                value=new_values[i]
+            )
+        return True
+    except Exception as e:
+        log.error(f"Failed to apply keyframes for {attr_data.full_attr}: {e}")
+        return False
+
+
+# =============================================================================
+# Smart Fallback Logic
+# =============================================================================
+
+def apply_smart_fallbacks(
+    attribute_data_list: List[AttributeData],
+    context: AdjustmentContext
+) -> List[AttributeData]:
+    """
+    Apply fallback logic to find velocity data for attributes with flat composites.
+
+    When an attribute has no velocity in its composite graph, we try:
+    1. Other axes of the same channel (translateX -> translateY, translateZ)
+    2. Other channels entirely (translate -> rotate -> scale)
+
+    Args:
+        attribute_data_list: List of attribute data objects
+        context: The adjustment context
+
+    Returns:
+        Updated list with fallback velocities applied.
+    """
+    # Build lookup for quick access
+    lookup: Dict[str, AttributeData] = {
+        f"{ad.obj}.{ad.attr}": ad for ad in attribute_data_list
+    }
+
+    for attr_data in attribute_data_list:
+        if attr_data.has_valid_velocity():
+            continue
+
+        # Try other axes first
+        fallback = _find_axis_fallback(attr_data, lookup)
+
+        # Try other channels if axis fallback failed
+        if not fallback:
+            fallback = _find_channel_fallback(attr_data, lookup)
+
+        if fallback:
+            attr_data.composite_velocity = fallback.composite_velocity[:]
+            attr_data.velocity_source = fallback.attr
+            log.debug(f"Substituting {fallback.attr} velocity for {attr_data.attr}")
+
+    return attribute_data_list
+
+
+def _find_axis_fallback(
+    attr_data: AttributeData,
+    lookup: Dict[str, AttributeData]
+) -> Optional[AttributeData]:
+    """Find fallback velocity from other axes of the same channel."""
+    other_axes = get_other_axis(attr_data.attr)
+
+    for other_attr in other_axes:
+        key = f"{attr_data.obj}.{other_attr}"
+        if key in lookup and lookup[key].has_valid_velocity():
+            return lookup[key]
+
+    return None
+
+
+def _find_channel_fallback(
+    attr_data: AttributeData,
+    lookup: Dict[str, AttributeData]
+) -> Optional[AttributeData]:
+    """Find fallback velocity from other channels."""
+    other_channels = get_other_channel(attr_data.attr)
+    best_fallback = None
+    best_velocity = 0.0
+
+    for channel in other_channels:
+        for axis in ['X', 'Y', 'Z']:
+            key = f"{attr_data.obj}.{channel}{axis}"
+            if key in lookup and lookup[key].has_valid_velocity():
+                max_vel = max(lookup[key].composite_velocity)
+                if max_vel > best_velocity:
+                    best_velocity = max_vel
+                    best_fallback = lookup[key]
+
+    return best_fallback
+
+
+# =============================================================================
+# Main Entry Point (New Pipeline)
+# =============================================================================
+
+def run_pipeline(smart: bool = SMART, do_set: bool = DO_SET) -> bool:
+    """
+    Run the adjustment blend using the new pipeline architecture.
+
+    This is the recommended entry point - it uses proper data structures
+    and animLib.LayerStack for composite value reading.
+
+    Args:
+        smart: If True, apply fallback logic for flat velocity graphs
+        do_set: If True, actually write keyframes. If False, dry run.
+
+    Returns:
+        True if successful, False otherwise.
+    """
+    # Stage 1: Gather context
+    context = gather_context()
+    if not context:
+        return False
+
+    # Stage 2: Collect attribute data
+    attribute_data_list = collect_attribute_data(context)
+    if not attribute_data_list:
+        cmds.warning("No attributes to process!")
+        return False
+
+    # Stage 2.5: Apply smart fallbacks if enabled
+    if smart:
+        attribute_data_list = apply_smart_fallbacks(attribute_data_list, context)
+
+    # Filter out attributes with no valid velocity
+    valid_attributes = [ad for ad in attribute_data_list if ad.has_valid_velocity()]
+
+    if not valid_attributes:
+        cmds.warning("No attributes have valid velocity data to process!")
+        return False
+
+    # Stage 3 & 4: Calculate and apply for each attribute
+    processed = []
+    for attr_data in valid_attributes:
+        new_values = calculate_adjustment_values(attr_data, context)
+
+        if do_set:
+            if apply_keyframes(attr_data, new_values, context):
+                processed.append(attr_data.full_attr)
+
+    if DEBUG:
+        if processed:
+            log.info(f"Processed attributes: {processed}")
+        if not do_set:
+            cmds.warning("Skipped do_set. Dry run complete.")
+
+    return bool(processed)
+
+
+# =============================================================================
+# Legacy Entry Point (Original Implementation)
+# =============================================================================
 
 def run(smart=SMART, do_set=DO_SET):
     # We only process one layer and it's controls (or the selected controls in it)
@@ -1022,14 +1567,32 @@ def get_curve_data():
     last_frame = max(all_frames)
 
 
-# ---------------------------------------------------------------------------- #
-# Developer section
+# =============================================================================
+# Developer Section
+# =============================================================================
 
 if __name__ == '__main__':
-    print("# " + 76*"=" + " #\n") # Divider
-    run(smart=False, do_set=True)
-    # pass
+    print("# " + 76 * "=" + " #\n")  # Divider
 
-# TODO: Evaluate sections independently from each other. For example, if an adjustment goes from 1-90 and another from 90-100,
-#       if the baseAnimation has no value change within the first section, but does within the second, the composite is flat
-#       for the first section but not the second section. Bad results.
+    # Use the new pipeline architecture by default
+    # Set USE_LEGACY=True to use the original implementation
+    USE_LEGACY = False
+
+    if USE_LEGACY:
+        run(smart=False, do_set=True)
+    else:
+        run_pipeline(smart=False, do_set=True)
+
+
+# =============================================================================
+# TODO / Known Issues
+# =============================================================================
+#
+# TODO: Evaluate sections independently from each other. For example, if an
+#       adjustment goes from 1-90 and another from 90-100, if the baseAnimation
+#       has no value change within the first section, but does within the second,
+#       the composite is flat for the first section but not the second section.
+#       Bad results.
+#
+# TODO: Support override layers properly (currently assumes additive)
+#
