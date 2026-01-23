@@ -798,8 +798,12 @@ def apply_smart_fallbacks(
     Apply fallback logic to find velocity data for attributes with flat composites.
 
     When an attribute has no velocity in its composite graph, we try:
-    1. Other axes of the same channel (translateX -> translateY, translateZ)
-    2. Other channels entirely (translate -> rotate -> scale)
+    1. Other axes of the same channel (rotateY -> rotateX, rotateZ)
+    2. Other channels entirely (rotate -> translate -> scale)
+
+    IMPORTANT: We query the LayerStack directly for neighboring attributes,
+    even if they're not on the adjustment layer. This allows rotateY (adjustment)
+    to use rotateX velocity from lower layers.
 
     Args:
         attribute_data_list: List of attribute data objects
@@ -808,35 +812,141 @@ def apply_smart_fallbacks(
     Returns:
         Updated list with fallback velocities applied.
     """
-    # Build lookup for quick access
+    # Build lookup for attributes on the adjustment layer
     lookup: Dict[str, AttributeData] = {
         f"{ad.obj}.{ad.attr}": ad for ad in attribute_data_list
     }
+
+    # Cache LayerStacks per object to avoid rebuilding
+    layer_stacks: Dict[str, animLib.LayerStack] = {}
 
     for attr_data in attribute_data_list:
         if attr_data.has_valid_velocity():
             continue
 
-        # Try other axes first
-        fallback = _find_axis_fallback(attr_data, lookup)
+        # Get or build LayerStack for this object
+        if attr_data.obj not in layer_stacks:
+            try:
+                layer_stacks[attr_data.obj] = animLib.LayerStack.build(
+                    attr_data.obj, context.adjustment_layer
+                )
+            except Exception as e:
+                log.warning(f"Could not build LayerStack for {attr_data.obj}: {e}")
+                continue
+
+        stack = layer_stacks[attr_data.obj]
+
+        # Try other axes first (same channel: rotateY -> rotateX, rotateZ)
+        fallback_velocity, fallback_source = _find_axis_fallback_from_stack(
+            attr_data, lookup, stack, context.calculation_range
+        )
 
         # Try other channels if axis fallback failed
-        if not fallback:
-            fallback = _find_channel_fallback(attr_data, lookup)
+        if not fallback_velocity:
+            fallback_velocity, fallback_source = _find_channel_fallback_from_stack(
+                attr_data, lookup, stack, context.calculation_range
+            )
 
-        if fallback:
-            attr_data.composite_velocity = fallback.composite_velocity[:]
-            attr_data.velocity_source = fallback.attr
-            log.debug(f"Substituting {fallback.attr} velocity for {attr_data.attr}")
+        if fallback_velocity and not is_equal(fallback_velocity):
+            attr_data.composite_velocity = fallback_velocity
+            attr_data.velocity_source = fallback_source
+            log.debug(f"Substituting {fallback_source} velocity for {attr_data.attr}")
 
     return attribute_data_list
 
 
+def _find_axis_fallback_from_stack(
+    attr_data: AttributeData,
+    lookup: Dict[str, AttributeData],
+    stack: animLib.LayerStack,
+    calculation_range: List[float]
+) -> tuple:
+    """
+    Find fallback velocity from other axes of the same channel.
+
+    First checks the lookup (attributes on adjustment layer), then
+    queries the LayerStack for attributes that exist only in lower layers.
+
+    Returns:
+        (velocity_list, source_attr) or (None, None) if not found
+    """
+    other_axes = get_other_axis(attr_data.attr)
+
+    for other_attr in other_axes:
+        key = f"{attr_data.obj}.{other_attr}"
+
+        # First, check if this attr is on the adjustment layer with valid velocity
+        if key in lookup and lookup[key].has_valid_velocity():
+            return lookup[key].composite_velocity[:], other_attr
+
+        # If not in lookup, query the LayerStack directly
+        # This handles attributes that exist in lower layers but not adjustment layer
+        try:
+            composite_values = stack.get_base_values(other_attr, calculation_range)
+            velocity = get_velocity_graph(composite_values)
+            if not is_equal(velocity):
+                return velocity, other_attr
+        except Exception:
+            # Attribute might not exist on this object
+            pass
+
+    return None, None
+
+
+def _find_channel_fallback_from_stack(
+    attr_data: AttributeData,
+    lookup: Dict[str, AttributeData],
+    stack: animLib.LayerStack,
+    calculation_range: List[float]
+) -> tuple:
+    """
+    Find fallback velocity from other channels.
+
+    Searches translate/rotate/scale channels for the best velocity source,
+    checking both adjustment layer attributes and lower layer composites.
+
+    Returns:
+        (velocity_list, source_attr) or (None, None) if not found
+    """
+    other_channels = get_other_channel(attr_data.attr)
+    best_velocity = None
+    best_source = None
+    best_max_vel = 0.0
+
+    for channel in other_channels:
+        for axis in ['X', 'Y', 'Z']:
+            other_attr = f"{channel}{axis}"
+            key = f"{attr_data.obj}.{other_attr}"
+
+            velocity = None
+
+            # First, check lookup (adjustment layer attributes)
+            if key in lookup and lookup[key].has_valid_velocity():
+                velocity = lookup[key].composite_velocity
+            else:
+                # Query LayerStack for lower layer composites
+                try:
+                    composite_values = stack.get_base_values(other_attr, calculation_range)
+                    velocity = get_velocity_graph(composite_values)
+                except Exception:
+                    pass
+
+            if velocity and not is_equal(velocity):
+                max_vel = max(velocity)
+                if max_vel > best_max_vel:
+                    best_max_vel = max_vel
+                    best_velocity = velocity[:]
+                    best_source = other_attr
+
+    return best_velocity, best_source
+
+
+# Legacy fallback functions (kept for reference)
 def _find_axis_fallback(
     attr_data: AttributeData,
     lookup: Dict[str, AttributeData]
 ) -> Optional[AttributeData]:
-    """Find fallback velocity from other axes of the same channel."""
+    """DEPRECATED: Use _find_axis_fallback_from_stack instead."""
     other_axes = get_other_axis(attr_data.attr)
 
     for other_attr in other_axes:
@@ -851,7 +961,7 @@ def _find_channel_fallback(
     attr_data: AttributeData,
     lookup: Dict[str, AttributeData]
 ) -> Optional[AttributeData]:
-    """Find fallback velocity from other channels."""
+    """DEPRECATED: Use _find_channel_fallback_from_stack instead."""
     other_channels = get_other_channel(attr_data.attr)
     best_fallback = None
     best_velocity = 0.0
