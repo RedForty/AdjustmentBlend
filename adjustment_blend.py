@@ -866,31 +866,60 @@ def _find_axis_fallback_from_stack(
 
     Priority: translateX -> translateY, translateZ (same channel first!)
 
-    First checks the lookup (attributes on adjustment layer), then
-    uses LayerStack.ensure_contribution() to build and query contributions
-    for attributes that exist only in lower layers.
+    Uses a heuristic to pick the best axis: choose the one whose total
+    motion delta is closest to the adjustment curve's delta. This makes
+    artistic sense - a stride motion (translateZ) is more related to a
+    horizontal adjustment (translateX) than a small up/down bobble (translateY).
 
     Returns:
         (velocity_list, source_attr) or (None, None) if not found
     """
     other_axes = get_other_axis(attr_data.attr)
 
+    # Calculate the adjustment curve's total delta (how much it changes)
+    adjustment_delta = sum(get_velocity_graph(attr_data.adjustment_values))
+
+    # Collect candidates with their velocities and deltas
+    candidates = []
+
     for other_attr in other_axes:
         key = f"{attr_data.obj}.{other_attr}"
+        velocity = None
 
         # First, check if this attr is on the adjustment layer with valid velocity
         if key in lookup and lookup[key].has_valid_velocity():
-            return lookup[key].composite_velocity[:], other_attr
+            velocity = lookup[key].composite_velocity[:]
+        else:
+            # Use LayerStack to get composite values for this attribute
+            if stack.ensure_contribution(other_attr):
+                composite_values = stack.get_base_values(other_attr, calculation_range)
+                velocity = get_velocity_graph(composite_values)
 
-        # Use LayerStack to get composite values for this attribute
-        # ensure_contribution() builds the contribution data if needed
-        if stack.ensure_contribution(other_attr):
-            composite_values = stack.get_base_values(other_attr, calculation_range)
-            velocity = get_velocity_graph(composite_values)
-            if not is_equal(velocity):
-                return velocity, other_attr
+        if velocity and not is_equal(velocity):
+            # Calculate total delta for this candidate
+            candidate_delta = sum(velocity)
+            candidates.append((other_attr, velocity, candidate_delta))
 
-    return None, None
+    if not candidates:
+        return None, None
+
+    # If only one candidate, use it
+    if len(candidates) == 1:
+        return candidates[0][1], candidates[0][0]
+
+    # Pick the candidate whose delta is closest to the adjustment delta
+    best_candidate = min(
+        candidates,
+        key=lambda c: abs(c[2] - adjustment_delta)
+    )
+
+    log.debug(
+        f"Axis fallback for {attr_data.attr}: adjustment_delta={adjustment_delta:.2f}, "
+        f"chose {best_candidate[0]} (delta={best_candidate[2]:.2f}) over "
+        f"{[c[0] for c in candidates if c[0] != best_candidate[0]]}"
+    )
+
+    return best_candidate[1], best_candidate[0]
 
 
 def _find_channel_fallback_from_stack(
