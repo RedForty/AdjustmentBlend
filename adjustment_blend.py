@@ -864,8 +864,10 @@ def _find_axis_fallback_from_stack(
     """
     Find fallback velocity from other axes of the same channel.
 
+    Priority: translateX -> translateY, translateZ (same channel first!)
+
     First checks the lookup (attributes on adjustment layer), then
-    queries the LayerStack for attributes that exist only in lower layers.
+    queries Maya directly for the composite value of attributes in lower layers.
 
     Returns:
         (velocity_list, source_attr) or (None, None) if not found
@@ -879,16 +881,14 @@ def _find_axis_fallback_from_stack(
         if key in lookup and lookup[key].has_valid_velocity():
             return lookup[key].composite_velocity[:], other_attr
 
-        # If not in lookup, query the LayerStack directly
-        # This handles attributes that exist in lower layers but not adjustment layer
-        try:
-            composite_values = stack.get_base_values(other_attr, calculation_range)
-            velocity = get_velocity_graph(composite_values)
-            if not is_equal(velocity):
-                return velocity, other_attr
-        except Exception:
-            # Attribute might not exist on this object
-            pass
+        # Query Maya directly for the composite value at each frame
+        # This works for attributes that exist only in lower layers
+        # (LayerStack.get_base_values only works for attrs on the target layer)
+        velocity = _get_velocity_from_evaluated_attr(
+            attr_data.obj, other_attr, calculation_range
+        )
+        if velocity and not is_equal(velocity):
+            return velocity, other_attr
 
     return None, None
 
@@ -902,8 +902,8 @@ def _find_channel_fallback_from_stack(
     """
     Find fallback velocity from other channels.
 
-    Searches translate/rotate/scale channels for the best velocity source,
-    checking both adjustment layer attributes and lower layer composites.
+    Only called after same-channel fallback fails.
+    Searches other channels (rotate/scale if translate, etc.) for velocity.
 
     Returns:
         (velocity_list, source_attr) or (None, None) if not found
@@ -924,12 +924,10 @@ def _find_channel_fallback_from_stack(
             if key in lookup and lookup[key].has_valid_velocity():
                 velocity = lookup[key].composite_velocity
             else:
-                # Query LayerStack for lower layer composites
-                try:
-                    composite_values = stack.get_base_values(other_attr, calculation_range)
-                    velocity = get_velocity_graph(composite_values)
-                except Exception:
-                    pass
+                # Query Maya directly for composite value
+                velocity = _get_velocity_from_evaluated_attr(
+                    attr_data.obj, other_attr, calculation_range
+                )
 
             if velocity and not is_equal(velocity):
                 max_vel = max(velocity)
@@ -939,6 +937,46 @@ def _find_channel_fallback_from_stack(
                     best_source = other_attr
 
     return best_velocity, best_source
+
+
+def _get_velocity_from_evaluated_attr(
+    obj: str,
+    attr: str,
+    calculation_range: List[float]
+) -> Optional[List[float]]:
+    """
+    Get velocity graph by evaluating an attribute at each frame.
+
+    This queries Maya directly for the composite value (all layers combined),
+    which works for attributes that aren't on the adjustment layer.
+
+    Args:
+        obj: Object name
+        attr: Attribute name (e.g., 'translateY')
+        calculation_range: List of frames to evaluate
+
+    Returns:
+        Velocity graph or None if attribute doesn't exist/isn't animated
+    """
+    plug = f"{obj}.{attr}"
+
+    # Check if attribute exists and is potentially animated
+    if not cmds.objExists(plug):
+        return None
+
+    try:
+        # Evaluate attribute at each frame to get composite values
+        composite_values = []
+        for frame in calculation_range:
+            value = cmds.getAttr(plug, time=frame)
+            composite_values.append(value)
+
+        # Calculate velocity from the composite values
+        velocity = get_velocity_graph(composite_values)
+        return velocity
+
+    except Exception:
+        return None
 
 
 # Legacy fallback functions (kept for reference)
