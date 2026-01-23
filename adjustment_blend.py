@@ -535,13 +535,13 @@ def run(smart=SMART, do_set=DO_SET):
 
 
     # Clean out any attribute that holds no value-changing adjustment curves
-    for obj in list(ctrl_curves_to_process.keys()):
-        for attr in list(ctrl_curves_to_process[obj].keys()):
-            attribute = obj + '.' + attr
-            if attribute in attributes_to_skip:
-                del ctrl_curves_to_process[obj][attr]
-            if adjustment_layer not in ctrl_curves_to_process[obj][attr].keys():
-                del ctrl_curves_to_process[obj][attr]
+    # for obj in list(ctrl_curves_to_process.keys()):
+    #     for attr in list(ctrl_curves_to_process[obj].keys()):
+    #         attribute = obj + '.' + attr
+    #         if attribute in attributes_to_skip:
+    #             del ctrl_curves_to_process[obj][attr]
+    #         if adjustment_layer not in ctrl_curves_to_process[obj][attr].keys():
+    #             del ctrl_curves_to_process[obj][attr]
 
 
     # At this point, we have the curve names of objects on the
@@ -628,8 +628,8 @@ def run(smart=SMART, do_set=DO_SET):
                     api_curve = return_MFnAnimCurve(destination[0])
                     value_graph = get_value_graph(api_curve, calculation_range)
 
-                    if is_equal(value_graph):
-                        continue # Constant values are irrelevant
+                    # if is_equal(value_graph):
+                    #     continue # Constant values are irrelevant
 
                     if layer == adjustment_layer:
                         value_graphs[obj][attr]['adjustment_graph'] = value_graph
@@ -674,43 +674,58 @@ def run(smart=SMART, do_set=DO_SET):
             adjustment_graph = value_graphs[obj][attr]['adjustment_graph']
             composite_graph  = value_graphs[obj][attr]['composite_graph']
 
-            if not composite_graph or not adjustment_curve or not adjustment_graph:
-                if not composite_graph:
+            if not composite_graph or not adjustment_curve or not adjustment_graph or is_equal(composite_graph):
+
+                if not composite_graph or is_equal(composite_graph):
                     # Need to look at adjacent axis to borrow a composite graph.
 
                     axis1, axis2 = get_other_axis(attr)
-                    # print("comparing {} to {} and {}".format(attr, axis1, axis2) )
+                    print("comparing {} to {} and {}".format(attr, axis1, axis2))
+                    if is_equal(value_graphs[obj][axis2]['composite_graph']) and not is_equal(value_graphs[obj][axis1]['composite_graph']):
+                        print("substituting {0} for {1}".format(attr, axis1))
+                        composite_graph = value_graphs[obj][axis1]['composite_graph']
+
+                    if is_equal(value_graphs[obj][axis1]['composite_graph']) and not is_equal(value_graphs[obj][axis2]['composite_graph']):
+                        print("substituting {0} for {1}".format(attr, axis2))
+                        composite_graph = value_graphs[obj][axis2]['composite_graph']
+
                     # print(value_graphs[obj][axis1]['composite_graph'])
                     # print(value_graphs[obj][axis2]['composite_graph'])
 
-                    axis1compare = value_graphs[obj][axis1]['adjustment_curve']
-                    axis2compare = value_graphs[obj][axis2]['adjustment_curve']
-                    highest_intensity_curve = compare_curve_intensities(axis1compare, axis2compare)
-
-                    if highest_intensity_curve == value_graphs[obj][axis1]['adjustment_curve']:
-                        # print("substituting {0} for {1}".format(attr, axis1))
-                        composite_graph = value_graphs[obj][axis1]['composite_graph']
-                    elif highest_intensity_curve == value_graphs[obj][axis2]['adjustment_curve']:
-                        composite_graph = value_graphs[obj][axis2]['composite_graph']
-                        # print("substituting {0} for {1}".format(attr, axis2))
                     if not composite_graph:
-                        # Looks like no suitable composite graph was found. Extending search to other channel (ie, rotate to translate).
-                        # print("Attr {} has failed at finding a suitable composite graph.".format(attr))
+                        axis1compare = value_graphs[obj][axis1]['adjustment_curve']
+                        axis2compare = value_graphs[obj][axis2]['adjustment_curve']
+                        highest_intensity_curve = compare_curve_intensities(axis1compare, axis2compare)
 
-                        # channel1, channel2 = get_other_channel(attr)
-                        composite_graph_compare = Vividict()
-                        for channel in get_other_channel(attr):
-                            for axis in ['X', 'Y', 'Z']:
-                                if channel+axis in value_graphs[obj].keys():
-                                    values = value_graphs[obj][channel+axis]['composite_graph']
-                                    composite_graph_compare[channel+axis] = max(get_velocity_graph(values))
+                        if highest_intensity_curve == value_graphs[obj][axis1]['adjustment_curve']:
+                            values = value_graphs[obj][axis1]['composite_graph']
+                            if not is_equal(values): # Trying to escape flat composite graphs and encourage looking for other channels
+                                print("substituting {0} for {1}".format(attr, axis1))
+                                composite_graph = values
+                        elif highest_intensity_curve == value_graphs[obj][axis2]['adjustment_curve']:
+                            values = value_graphs[obj][axis2]['composite_graph']
+                            if not is_equal(values): # Trying to escape flat composite graphs and encourage looking for other channels
+                                print("substituting {0} for {1}".format(attr, axis2))
+                                composite_graph = values
+                        if not composite_graph:
+                            # Looks like no suitable composite graph was found. Extending search to other channel (ie, rotate to translate).
+                            # print("Attr {} has failed at finding a suitable composite graph.".format(attr))
 
-                        hottest = keywithmaxval(composite_graph_compare)
-                        if hottest:
-                            # print("found hottest channel as {}".format(hottest))
-                            composite_graph = value_graphs[obj][hottest]['composite_graph']
-                            # print("hottest composite graph is {}".format(composite_graph))
-                            print("substituting {0} for {1}".format(attr, hottest))
+                            # channel1, channel2 = get_other_channel(attr)
+                            composite_graph_compare = Vividict()
+                            for channel in get_other_channel(attr):
+                                for axis in ['X', 'Y', 'Z']:
+                                    if channel+axis in value_graphs[obj].keys():
+                                        values = value_graphs[obj][channel+axis]['composite_graph']
+                                        composite_graph_compare[channel+axis] = max(get_velocity_graph(values))
+
+                            hottest = keywithmaxval(composite_graph_compare)
+                            if hottest:
+                                # print("found hottest channel as {}".format(hottest))
+                                composite_graph = value_graphs[obj][hottest]['composite_graph']
+                                # print("hottest composite graph is {}".format(composite_graph))
+                                print("substituting {0} for {1}".format(attr, hottest))
+
                 # continue
 
             new_value_curve = []
@@ -733,12 +748,14 @@ def run(smart=SMART, do_set=DO_SET):
                     try:
                         new_value = map_from_to(sum_percentage, 0, 100, adjustment_graph[calculation_range.index(frange[0])], adjustment_graph[calculation_range.index(frange[1])])
                     except TypeError:
-                        if DEBUG:
-                            print("frange = {}".format(frange))
-                            print("sum_percentage = {}".format(sum_percentage))
-                            print("adjustment_graph = {}".format(adjustment_graph))
-                            print("adjustment_graph_frange0 = {}".format(adjustment_graph[calculation_range.index(frange[0])]))
-                            print("adjustment_graph_frange1 = {}".format(adjustment_graph[calculation_range.index(frange[1])]))
+                        pass
+                        # print("TypeError")
+                        # if DEBUG:
+                        #     print("frange = {}".format(frange))
+                        #     print("sum_percentage = {}".format(sum_percentage))
+                        #     print("adjustment_graph = {}".format(adjustment_graph))
+                        #     print("adjustment_graph_frange0 = {}".format(adjustment_graph[calculation_range.index(frange[0])]))
+                        #     print("adjustment_graph_frange1 = {}".format(adjustment_graph[calculation_range.index(frange[1])]))
                     if value not in frame_march:
                         new_value_curve.append(new_value)
                         frame_march.append(value) # I do this to skip the repeat frames between sets - those keys already exist anyway
@@ -960,6 +977,8 @@ def compare_graph_intensities(graph1, graph2):
         return None
 
 def compare_curve_intensities(curve1, curve2):
+    if not curve1: return curve2
+    if not curve2: return curve1
     # Counts the number of signals data1 beats over data2
     # Returns the winning curve
     data1 = get_curve_intensity(curve1)
@@ -1008,5 +1027,9 @@ def get_curve_data():
 
 if __name__ == '__main__':
     print("# " + 76*"=" + " #\n") # Divider
-    run(smart=True, do_set=True)
+    run(smart=False, do_set=True)
     # pass
+
+# TODO: Evaluate sections independently from each other. For example, if an adjustment goes from 1-90 and another from 90-100,
+#       if the baseAnimation has no value change within the first section, but does within the second, the composite is flat
+#       for the first section but not the second section. Bad results.
