@@ -300,6 +300,51 @@ class LayerStack:
         attr_long = normalizeAttrName(attr)
         return attr_long in self.contributions and len(self.contributions[attr_long]) > 0
 
+    def ensure_contribution(self, attr: str) -> bool:
+        """
+        Build contribution data for an attribute if it doesn't already exist.
+
+        This allows querying composite values for attributes that aren't on
+        the target layer (e.g., for smart fallback in adjustment_blend).
+
+        Args:
+            attr: Attribute name (e.g., 'translateY')
+
+        Returns:
+            True if contributions exist or were built, False if attribute
+            has no animation data.
+        """
+        attr_long = normalizeAttrName(attr)
+
+        # Already have contributions for this attr
+        if attr_long in self.contributions:
+            return len(self.contributions[attr_long]) > 0
+
+        # Build curve -> layer lookup if not cached
+        if not hasattr(self, '_curve_to_layer'):
+            self._curve_to_layer = {}
+            all_layers = cmds.ls(type='animLayer') or []
+            for layer in all_layers:
+                layer_curves = cmds.animLayer(layer, query=True, animCurves=True) or []
+                for curve in layer_curves:
+                    self._curve_to_layer[curve] = layer
+
+        # Get target layer curves for exclusion
+        layer_curves = cmds.animLayer(self.target_layer, query=True, animCurves=True) or []
+        target_curve_set = set(layer_curves)
+
+        # Traverse blend node chain for this attribute
+        contribs = _traverse_for_contributions(
+            self.node, attr_long, self.target_layer,
+            target_curve_set, self, self._curve_to_layer
+        )
+
+        if contribs:
+            self.contributions[attr_long] = contribs
+            return True
+
+        return False
+
     def diagnose(self) -> str:
         """Generate a diagnostic string showing the discovered layer structure."""
         lines = [
