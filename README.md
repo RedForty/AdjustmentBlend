@@ -1,15 +1,129 @@
-## AdjustmentBlend
-Based on [Dan Low's GDC talk](https://www.youtube.com/watch?v=eeWBlMJHR14).
+# Adjustment Blend
 
-## Instructions:
-Place adjustment_blend.py in your scripts folder.
+**Velocity-matched keyframe interpolation for Maya animation layers.**
 
-1. Animate your objects. 
-2. Add ONE animLayer to offset your animation. Key only the first and last frames on the animLayer.
-3. Select all the objects that share that animLayer
-4. Run the following command in Python:
+Drop an additive animation layer with just a *start* and an *end* key to offset
+some existing motion, then let Adjustment Blend fill in the in-betweens. Instead
+of a flat linear blend, the offset is distributed across the segment in
+proportion to how fast the *underlying* animation is moving — so contacts stay
+planted, holds stay held, and the adjustment rides along with the motion that's
+already there.
 
-##
-    import adjustment_blend
-    adjustment_blend.run(smart=True)
+Based on [Dan Low's GDC talk](https://www.youtube.com/watch?v=eeWBlMJHR14) on
+adjustment blending.
 
+---
+
+## Requirements
+
+- Autodesk Maya 2022 or newer (Python 3).
+
+## Install
+
+Adjustment Blend is a normal Python package. Pick whichever fits your pipeline:
+
+- **Drop-in (artists / TDs):** copy the `adjustment_blend/` folder into a folder
+  on your Maya `PYTHONPATH` (e.g. `~/maya/scripts`).
+- **Editable / headless / CI:** `pip install -e .` into the interpreter you want
+  (including `mayapy`).
+
+## Usage
+
+### Interactive (the everyday workflow)
+
+1. Animate your objects.
+2. Add **one** animation layer to offset your animation. Key only the **first**
+   and **last** frames on that layer.
+3. Select the objects that share that adjustment layer (and select the layer in
+   the Anim Layer editor).
+4. Run:
+
+```python
+import adjustment_blend
+adjustment_blend.run(smart=True)
+```
+
+With no arguments, `run()` reads the adjustment layer and the stack beneath it
+from the Anim Layer editor and operates on your current selection.
+
+### Explicit / headless (pipeline, batch, tests)
+
+Pass the layer context yourself to skip all UI queries:
+
+```python
+import adjustment_blend
+
+adjustment_blend.run(
+    adjustment_layer="AnimLayer1",
+    layers_below=["BaseAnimation"],
+    objects=["pCube1"],
+    smart=True,
+)
+```
+
+### Options
+
+| Argument           | Default      | Meaning                                                                 |
+| ------------------ | ------------ | ----------------------------------------------------------------------- |
+| `adjustment_layer` | *discovered* | Target layer to densify. Read from the UI when omitted.                 |
+| `layers_below`     | *discovered* | Ordered layers to composite motion from. Read from the UI when omitted. |
+| `objects`          | *selection*  | Objects to process. Falls back to selection, then to layer members.     |
+| `smart`            | `False`      | Borrow motion from a sibling axis/channel when a composite is flat.     |
+| `apply`            | `True`       | Set `False` for a dry run that computes but writes nothing.             |
+
+## How it works
+
+Maya's layer blend is linear: it spreads your start→end offset evenly over time,
+which slides feet and drifts contacts because it ignores what the base animation
+is doing. Adjustment Blend instead samples the **velocity (speed) graph** of the
+layers below the adjustment layer and hands out the offset *in proportion to that
+motion*. Fast frames absorb most of the change; held frames barely move; the
+artist's keyed endpoints are always honored exactly.
+
+The pipeline runs in four stages:
+
+1. **`build_context`** — resolve layers/objects, collect the adjustment keys.
+2. **`collect_attribute_data`** — read composite motion below via `LayerStack`.
+3. **`distribute_adjustment`** — the velocity-weighted distribution (pure math).
+4. **`apply_keyframes`** — write the densified curve back to Maya.
+
+`smart=True` adds a fallback: when an attribute's own underlying motion is flat,
+it borrows motion from the sibling axis (or channel) whose net displacement best
+matches the adjustment — e.g. a horizontal `rotateY` offset can ride the stride
+already present in `translateZ`.
+
+## Project layout
+
+```
+adjustment_blend/
+├── core.py          # pure algorithm — no Maya, fully unit tested
+├── maya_layers.py   # LayerStack: walks Maya's blend-node chains
+├── maya_scene.py    # scene I/O + layer discovery (the only UI dependency)
+└── pipeline.py      # orchestration + the public run() entry point
+tests/
+└── test_core.py     # algorithm tests (run with plain pytest, no Maya)
+```
+
+The algorithm lives entirely in `core.py` with **no Maya dependency**, so it can
+be unit tested and reused from anywhere. The Maya-facing modules only read values
+out of the scene and write keyframes back.
+
+## Development
+
+```bash
+pip install -e ".[dev]"
+pytest
+```
+
+The test suite covers the pure core and needs no Maya install.
+
+## Known limitations
+
+- Segments are evaluated independently; an adjustment spanning a region where
+  the base animation is flat in one segment but not another can produce uneven
+  results (smart mode mitigates this).
+- Override layers are treated as additive.
+
+## License
+
+See [LICENSE.md](LICENSE.md).
