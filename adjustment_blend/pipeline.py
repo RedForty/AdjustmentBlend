@@ -17,6 +17,7 @@ without touching the UI.
 from __future__ import annotations
 
 import logging
+from collections import defaultdict
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
@@ -24,6 +25,7 @@ from maya import cmds
 
 from . import core
 from . import maya_scene
+from . import vector_core
 from .maya_layers import LayerStack
 
 log = logging.getLogger(__name__)
@@ -421,6 +423,7 @@ def run(
     layers_below: Optional[List[str]] = None,
     objects: Optional[List[str]] = None,
     *,
+    signal: str = "scalar",
     smart: bool = False,
     apply: bool = True,
 ) -> bool:
@@ -449,8 +452,18 @@ def run(
             the UI if ``None``.
         objects: Objects to process. Defaults to the selection, then to the
             adjustment layer's members.
-        smart: If ``True``, borrow motion from sibling axes/channels when an
-            attribute's own composite is flat.
+        signal: Which motion signal drives the distribution.
+
+            * ``"scalar"`` (default) — per-attribute velocity. ``smart`` borrows
+              motion from a sibling axis, then another channel, when an
+              attribute's own composite is flat.
+            * ``"vector"`` (experimental) — one shared speed per channel group
+              (translation speed / angular speed / scale speed). A flat axis
+              rides its group's motion automatically, so ``smart`` only governs
+              the last-resort *cross-channel* borrow (e.g. a fully static
+              rotation group riding translation).
+        smart: Enable fallbacks for attributes with no motion of their own
+            (see ``signal``).
         apply: If ``True``, write keyframes. If ``False``, compute only (dry run).
 
     Returns:
@@ -473,7 +486,33 @@ def run(
     if not context:
         return False
 
-    # Stage 2: data
+    if signal == "vector":
+        return _run_vector(context, smart=smart, apply=apply)
+    if signal == "scalar":
+        return _run_scalar(context, smart=smart, apply=apply)
+    raise ValueError(f"Unknown signal {signal!r}; expected 'scalar' or 'vector'.")
+
+
+def _emit(processed, attr_data, new_values, context, apply):
+    """Apply (or, in a dry run, just record) one attribute's new values."""
+    if not apply:
+        processed.append(attr_data.full_attr)
+    elif apply_keyframes(attr_data, new_values, context):
+        processed.append(attr_data.full_attr)
+
+
+def _report(processed, apply, label):
+    if apply:
+        log.info("Adjusted attributes (%s): %s", label, processed)
+    else:
+        cmds.warning(
+            f"apply=False: dry run, no keyframes written. Would adjust ({label}): {processed}"
+        )
+    return bool(processed)
+
+
+def _run_scalar(context: AdjustmentContext, *, smart: bool, apply: bool) -> bool:
+    """Original per-attribute velocity distribution."""
     attribute_data_list = collect_attribute_data(context)
     if not attribute_data_list:
         cmds.warning("No attributes to process!")
@@ -487,19 +526,104 @@ def run(
         cmds.warning("No attributes have valid velocity data to process!")
         return False
 
-    # Stages 3 & 4: calculate and (optionally) apply
-    processed = []
+    processed: List[str] = []
     for attr_data in valid_attributes:
         new_values = calculate_adjustment_values(attr_data, context)
-        if apply:
-            if apply_keyframes(attr_data, new_values, context):
-                processed.append(attr_data.full_attr)
-        else:
-            processed.append(attr_data.full_attr)
+        _emit(processed, attr_data, new_values, context, apply)
 
-    if apply:
-        log.info("Adjusted attributes: %s", processed)
-    else:
-        cmds.warning(f"apply=False: dry run, no keyframes written. Would adjust: {processed}")
+    return _report(processed, apply, "scalar")
 
-    return bool(processed)
+
+def _run_vector(context: AdjustmentContext, *, smart: bool, apply: bool) -> bool:
+    """Experimental per-channel-group speed distribution (see :mod:`vector_core`)."""
+    attribute_data_list = collect_attribute_data(context)
+    if not attribute_data_list:
+        cmds.warning("No attributes to process!")
+        return False
+
+    # Which channel groups does each object have adjustments on?
+    obj_groups: Dict[str, set] = defaultdict(set)
+    for ad in attribute_data_list:
+        group = vector_core.channel_of(ad.attr)
+        if group:
+            obj_groups[ad.obj].add(group)
+
+    # Compute the shared speed signal per (object, group). When smart is on we
+    # compute every group so a static group can borrow from a moving one.
+    obj_speeds: Dict[str, Dict[str, List[float]]] = {}
+    for obj, groups in obj_groups.items():
+        try:
+            stack = LayerStack.build(obj, context.adjustment_layer)
+        except Exception as e:  # noqa: BLE001
+            log.warning("Could not build LayerStack for %s: %s", obj, e)
+            continue
+        needed = set(core.CHANNELS) if smart else set(groups)
+        obj_speeds[obj] = _group_speeds(obj, needed, stack, context.calculation_range)
+
+    processed: List[str] = []
+    left_sparse: List[str] = []
+    for ad in attribute_data_list:
+        speeds = obj_speeds.get(ad.obj)
+        if not speeds:
+            continue
+
+        group = vector_core.channel_of(ad.attr)
+        speed = speeds.get(group)
+        source = group
+
+        # Nothing on this group's own motion: optionally borrow another channel.
+        if speed is None or core.is_equal(speed):
+            borrow = vector_core.hottest_group(speeds, exclude=group) if smart else None
+            if borrow:
+                source, speed = borrow
+
+        if speed is None or core.is_equal(speed):
+            # No motion to ride anywhere — leave the attr sparse (Maya's own
+            # linear blend already covers a motionless offset).
+            left_sparse.append(ad.full_attr)
+            continue
+
+        if source != group:
+            log.debug("Vector: %s riding %s-group speed", ad.attr, source)
+
+        new_values = vector_core.distribute_by_speed(
+            speed, ad.adjustment_values,
+            context.adjustment_key_ranges, context.calculation_range,
+        )
+        _emit(processed, ad, new_values, context, apply)
+
+    if left_sparse:
+        log.debug("Vector: no motion to ride, left sparse: %s", left_sparse)
+
+    return _report(processed, apply, "vector")
+
+
+def _group_speeds(
+    obj: str,
+    groups: set,
+    stack: LayerStack,
+    calc_range: List[float],
+) -> Dict[str, List[float]]:
+    """Sample the below-motion for each axis of each group and reduce to speed."""
+    speeds: Dict[str, List[float]] = {}
+    n = len(calc_range)
+
+    for group in groups:
+        axes: Dict[str, List[float]] = {}
+        for axis in ("X", "Y", "Z"):
+            attr = group + axis
+            if stack.ensure_contribution(attr):
+                axes[axis] = stack.get_base_values(attr, calc_range)
+            else:
+                axes[axis] = [0.0] * n
+
+        order = "xyz"
+        if group == "rotate":
+            try:
+                order = cmds.getAttr(f"{obj}.rotateOrder")
+            except Exception:  # noqa: BLE001 - fall back to a sane default order
+                order = "xyz"
+
+        speeds[group] = vector_core.channel_group_speed(group, axes, order)
+
+    return speeds

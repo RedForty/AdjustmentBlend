@@ -22,7 +22,7 @@ pipeline yet; this is a sandbox for the algorithm.
 from __future__ import annotations
 
 import math
-from typing import Dict, List, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from .core import is_equal, map_from_to, normalize_values
 
@@ -126,6 +126,37 @@ def channel_group_speed(group: str, axes: Dict[str, Sequence[float]], order="xyz
     if group == "scale":
         return scale_speed(x, y, z)
     raise ValueError(f"Unknown channel group: {group}")
+
+
+def channel_of(attr: str) -> str:
+    """Return the channel group for an attribute (``rotateY`` -> ``rotate``)."""
+    for group in ("translate", "rotate", "scale"):
+        if attr.startswith(group):
+            return group
+    return ""
+
+
+def hottest_group(speeds: Dict[str, Sequence[float]], exclude: str = "") -> Optional[Tuple[str, list]]:
+    """Pick the moving group with the most motion, for cross-channel fallback.
+
+    Returns ``(group_name, speed)`` for the group (other than ``exclude``) with
+    the largest peak speed, or ``None`` if no other group is moving.
+
+    Note: peak speed is compared across groups with different units (cm vs
+    radians), so this is a heuristic — in practice it answers "borrow the
+    channel that's clearly doing something," which is exactly the rotate-from-
+    translate case it's meant for.
+    """
+    best: Optional[Tuple[str, list, float]] = None
+    for name, speed in speeds.items():
+        if name == exclude or is_equal(speed):
+            continue
+        peak = max(speed)
+        if best is None or peak > best[2]:
+            best = (name, list(speed), peak)
+    if best is None:
+        return None
+    return best[0], best[1]
 
 
 # =============================================================================

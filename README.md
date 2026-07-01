@@ -68,7 +68,8 @@ adjustment_blend.run(
 | `adjustment_layer` | *discovered* | Target layer to densify. Read from the UI when omitted.                 |
 | `layers_below`     | *discovered* | Ordered layers to composite motion from. Read from the UI when omitted. |
 | `objects`          | *selection*  | Objects to process. Falls back to selection, then to layer members.     |
-| `smart`            | `False`      | Borrow motion from a sibling axis/channel when a composite is flat.     |
+| `signal`           | `"scalar"`   | Motion signal. `"scalar"` = per-attribute velocity. `"vector"` (experimental) = one shared speed per channel group. |
+| `smart`            | `False`      | Enable fallbacks when an attribute has no motion of its own (see below). |
 | `apply`            | `True`       | Set `False` for a dry run that computes but writes nothing.             |
 
 ## How it works
@@ -91,6 +92,22 @@ The pipeline runs in four stages:
 it borrows motion from the sibling axis (or channel) whose net displacement best
 matches the adjustment — e.g. a horizontal `rotateY` offset can ride the stride
 already present in `translateZ`.
+
+### Experimental: `signal="vector"`
+
+The scalar signal looks at each attribute's own velocity, which goes flat when
+you introduce motion on an axis the base animation doesn't use (the reason
+`smart` exists). The **vector** signal instead reduces each channel group to a
+single speed — translation speed for `translate`, geodesic **angular speed** for
+`rotate` (built from all three Euler axes plus the rotation order), scale speed
+for `scale`. Because all three axes share one signal, a flat axis automatically
+rides whatever its siblings are doing below, so the sibling-axis fallback is no
+longer needed. In this mode `smart` governs only the last-resort *cross-channel*
+borrow (e.g. a fully static rotation group riding translation). Flat segments
+distribute linearly rather than collapsing.
+
+The algorithm lives in `adjustment_blend/vector_core.py` (pure, unit tested).
+It's opt-in while it gets real-scene mileage; the scalar path is unchanged.
 
 ## Project layout
 

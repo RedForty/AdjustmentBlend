@@ -106,6 +106,41 @@ def test_constant_speed_is_linear():
     assert [round(v, 6) for v in out] == [0.0, 10.0, 20.0, 30.0, 40.0]
 
 
+def test_channel_of():
+    assert vc.channel_of("translateX") == "translate"
+    assert vc.channel_of("rotateY") == "rotate"
+    assert vc.channel_of("scaleZ") == "scale"
+    assert vc.channel_of("visibility") == ""
+
+
+def test_hottest_group_picks_the_mover():
+    speeds = {
+        "rotate": [0.0, 0.0, 0.0],          # static
+        "translate": [0.0, 2.0, 5.0],       # moving
+        "scale": [0.0, 0.0, 0.0],           # static
+    }
+    picked = vc.hottest_group(speeds, exclude="rotate")
+    assert picked is not None
+    assert picked[0] == "translate"
+    assert picked[1] == [0.0, 2.0, 5.0]
+
+
+def test_hottest_group_excludes_self_and_flats():
+    speeds = {"rotate": [0.0, 1.0, 2.0], "translate": [0.0, 0.0, 0.0]}
+    # Everything other than 'rotate' is flat -> nothing to borrow.
+    assert vc.hottest_group(speeds, exclude="rotate") is None
+
+
+def test_hottest_group_prefers_larger_peak():
+    speeds = {
+        "rotate": [0.0, 0.0, 0.0],
+        "translate": [0.0, 1.0, 1.0],
+        "scale": [0.0, 9.0, 3.0],
+    }
+    picked = vc.hottest_group(speeds, exclude="rotate")
+    assert picked[0] == "scale"
+
+
 def test_the_smart_fallback_scenario():
     """THE motivating case: adjustment introduces rotateY, but rotateY is flat
     below while rotateX sweeps with ease-in/ease-out.
