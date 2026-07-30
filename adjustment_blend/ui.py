@@ -49,15 +49,18 @@ def show():
     win = cmds.window(_WINDOW, title="Adjustment Blend",
                       sizeable=False, resizeToFitChildren=True)
     cmds.columnLayout(adjustableColumn=True, rowSpacing=4,
-                      columnAttach=("both", 8), width=190)
+                      columnAttach=("both", 8), width=140)
 
     cmds.separator(height=3, style="none")
 
-    # The button. Command is wired below, once the toggles exist.
+    # The button. Command is wired below, once the toggles exist. Its tooltip
+    # carries the build version + date so you can confirm which build is loaded.
+    from . import build_stamp
     button = cmds.button(
         label="Adjustment Blend",
-        height=46,
-        annotation="Blend the selected adjustment layer using the options below.",
+        height=36,
+        annotation=f"Adjustment Blend  {build_stamp()}\n"
+                   f"Blend the selected adjustment layer using the options below.",
     )
 
     cmds.separator(height=3, style="in")

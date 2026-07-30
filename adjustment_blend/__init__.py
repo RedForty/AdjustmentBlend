@@ -64,6 +64,27 @@ def reload_all():
             importlib.reload(module)
     return importlib.reload(sys.modules[pkg])
 
+
+def build_stamp():
+    """Return a ``'v<version> · <date time>'`` string for the running build.
+
+    The timestamp is the most recent modification time across the package's
+    source files — i.e. when this build was last written or deployed — so it
+    tracks reality with no manual version-date bookkeeping. Handy in the UI
+    tooltip to confirm which build (and how fresh) is actually loaded.
+    """
+    import glob
+    import os
+    import time
+
+    sources = glob.glob(os.path.join(os.path.dirname(__file__), "*.py"))
+    try:
+        newest = max(os.path.getmtime(f) for f in sources)
+        when = time.strftime("%Y-%m-%d %H:%M", time.localtime(newest))
+    except (ValueError, OSError):
+        when = "unknown"
+    return f"v{__version__} · {when}"
+
 # The scene-facing API only loads inside Maya. Guarding the import keeps
 # ``import adjustment_blend`` (and ``adjustment_blend.core``) working in plain
 # CPython for unit tests and CI.
@@ -82,6 +103,7 @@ if _HAS_MAYA:
         "run",
         "show_ui",
         "reload_all",
+        "build_stamp",
         "AdjustmentContext",
         "AttributeData",
         "LayerStack",
@@ -89,4 +111,4 @@ if _HAS_MAYA:
         "__version__",
     ]
 else:
-    __all__ = ["core", "reload_all", "__version__"]
+    __all__ = ["core", "reload_all", "build_stamp", "__version__"]
