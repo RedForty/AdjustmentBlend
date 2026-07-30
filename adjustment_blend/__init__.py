@@ -37,6 +37,33 @@ __version__ = "0.1.0"
 # can use it directly.
 from . import core  # noqa: F401
 
+
+def reload_all():
+    """Reload every submodule so code edits take effect without restarting Maya.
+
+    The builtin ``reload()`` is shallow — it re-runs a package's ``__init__`` but
+    not its already-imported submodules — so edits to ``ui.py``, ``pipeline.py``,
+    etc. never show up. Call this during development instead. It reloads in
+    dependency order and refreshes this package's own bindings in place, so your
+    existing import keeps working (no reassignment needed)::
+
+        from klugTools import adjustment_blend
+        adjustment_blend.reload_all()
+        adjustment_blend.show_ui()
+
+    Returns the (reloaded) package module.
+    """
+    import importlib
+    import sys
+
+    pkg = __name__
+    # Leaves first, package last, so each reload sees fresh dependencies.
+    for sub in ("core", "vector_core", "maya_layers", "maya_scene", "pipeline", "ui"):
+        module = sys.modules.get(f"{pkg}.{sub}")
+        if module is not None:
+            importlib.reload(module)
+    return importlib.reload(sys.modules[pkg])
+
 # The scene-facing API only loads inside Maya. Guarding the import keeps
 # ``import adjustment_blend`` (and ``adjustment_blend.core``) working in plain
 # CPython for unit tests and CI.
@@ -54,6 +81,7 @@ if _HAS_MAYA:
     __all__ = [
         "run",
         "show_ui",
+        "reload_all",
         "AdjustmentContext",
         "AttributeData",
         "LayerStack",
@@ -61,4 +89,4 @@ if _HAS_MAYA:
         "__version__",
     ]
 else:
-    __all__ = ["core", "__version__"]
+    __all__ = ["core", "reload_all", "__version__"]

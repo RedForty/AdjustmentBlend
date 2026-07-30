@@ -39,7 +39,15 @@ def show():
     if cmds.window(_WINDOW, exists=True):
         cmds.deleteUI(_WINDOW)
 
-    win = cmds.window(_WINDOW, title="Adjustment Blend", sizeable=False)
+    # Maya persists a window's last size in its prefs and restores it on
+    # recreate — which is why editing the layout size can look like it does
+    # nothing, and why a once-tall window stays tall with empty space. Clearing
+    # the pref lets the window size itself to its current content.
+    if cmds.windowPref(_WINDOW, exists=True):
+        cmds.windowPref(_WINDOW, remove=True)
+
+    win = cmds.window(_WINDOW, title="Adjustment Blend",
+                      sizeable=False, resizeToFitChildren=True)
     cmds.columnLayout(adjustableColumn=True, rowSpacing=4,
                       columnAttach=("both", 8), width=190)
 
