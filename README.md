@@ -46,6 +46,19 @@ adjustment_blend.run(smart=True)
 With no arguments, `run()` reads the adjustment layer and the stack beneath it
 from the Anim Layer editor and operates on your current selection.
 
+### UI
+
+For a click-to-run panel with the two modes side by side (handy for A/B'ing
+Scalar vs Vector on a shot):
+
+```python
+import adjustment_blend
+adjustment_blend.show_ui()
+```
+
+A giant **Adjustment Blend** button over two toggles — **Signal** (Scalar /
+Vector) and **Mode** (Normal / Smart) — each run applied as a single undo step.
+
 ### Explicit / headless (pipeline, batch, tests)
 
 Pass the layer context yourself to skip all UI queries:

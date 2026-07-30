@@ -49,9 +49,11 @@ except ImportError:
 if _HAS_MAYA:
     from .pipeline import run, AdjustmentContext, AttributeData  # noqa: F401
     from .maya_layers import LayerStack  # noqa: F401
+    from .ui import show as show_ui  # noqa: F401
 
     __all__ = [
         "run",
+        "show_ui",
         "AdjustmentContext",
         "AttributeData",
         "LayerStack",
