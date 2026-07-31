@@ -1,13 +1,14 @@
 """
-A tiny Maya UI for Adjustment Blend.
+A tiny, dockable Maya UI for Adjustment Blend.
 
 One big button plus two toggles — Signal (Scalar / Vector) and Mode
 (Normal / Smart) — that call :func:`adjustment_blend.run`. Deliberately thin:
 all the real logic lives in the package; this just flips the two flags, wraps
 the run in a single undo chunk, and reports the result.
 
-The two toggles persist to ``optionVar`` so a user's choice is remembered across
-scenes and sessions.
+The panel is a ``workspaceControl``, so it docks anywhere in the Maya UI and
+Maya remembers where. The two toggles persist to ``optionVar`` so a user's
+choice is remembered across scenes and sessions.
 
 Built with ``maya.cmds`` UI (rather than Qt) so it works across Maya versions
 with no PySide2/PySide6 shims.
@@ -27,7 +28,7 @@ from .pipeline import run
 
 log = logging.getLogger(__name__)
 
-_WINDOW = "adjustmentBlendWindow"
+_WORKSPACE = "adjustmentBlendWorkspaceControl"
 
 # Persistent preferences (1 = first option, 2 = second option).
 _OPT_SIGNAL = "adjustmentBlendSignal"   # 1 = Scalar, 2 = Vector
@@ -35,27 +36,40 @@ _OPT_MODE = "adjustmentBlendMode"       # 1 = Normal, 2 = Smart
 
 
 def show():
-    """Create (or re-show) the Adjustment Blend window."""
-    if cmds.window(_WINDOW, exists=True):
-        cmds.deleteUI(_WINDOW)
+    """Create (or re-show) the dockable Adjustment Blend panel."""
+    if cmds.workspaceControl(_WORKSPACE, exists=True):
+        cmds.deleteUI(_WORKSPACE)
 
-    # Maya persists a window's last size in its prefs and restores it on
-    # recreate — which is why editing the layout size can look like it does
-    # nothing, and why a once-tall window stays tall with empty space. Clearing
-    # the pref lets the window size itself to its current content.
-    if cmds.windowPref(_WINDOW, exists=True):
-        cmds.windowPref(_WINDOW, remove=True)
+    # The uiScript lets Maya (re)build the panel's contents on demand — when it
+    # is docked, floated, restored from a saved layout, or rebuilt on startup.
+    # Build the call from this module's real name so it resolves whatever the
+    # install path is (klugTools.adjustment_blend.ui, adjustment_blend.ui, ...).
+    ui_script = f"import {__name__} as _ab_ui; _ab_ui._build_ui()"
 
-    win = cmds.window(_WINDOW, title="Adjustment Blend",
-                      sizeable=False, resizeToFitChildren=True)
+    cmds.workspaceControl(
+        _WORKSPACE,
+        label="Adjustment Blend",
+        uiScript=ui_script,
+        retain=False,
+        floating=True,
+    )
+    return _WORKSPACE
+
+
+def _build_ui():
+    """Populate the panel. Called by Maya via the ``uiScript``.
+
+    Maya sets the current parent to the workspaceControl before calling this, so
+    the layout below lands inside the dockable frame.
+    """
+    from . import build_stamp
+
     cmds.columnLayout(adjustableColumn=True, rowSpacing=4,
                       columnAttach=("both", 8), width=140)
 
     cmds.separator(height=3, style="none")
 
-    # The button. Command is wired below, once the toggles exist. Its tooltip
-    # carries the build version + date so you can confirm which build is loaded.
-    from . import build_stamp
+    # Tooltip carries the build version + date so you can confirm what's loaded.
     button = cmds.button(
         label="Adjustment Blend",
         height=36,
@@ -92,9 +106,6 @@ def show():
                         changeCommand=functools.partial(_save_choice, _OPT_MODE, mode_ctrl))
     cmds.button(button, edit=True,
                 command=functools.partial(_on_run, signal_ctrl, mode_ctrl))
-
-    cmds.showWindow(win)
-    return win
 
 
 def _load_choice(opt_key, default=1):

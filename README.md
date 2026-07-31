@@ -56,9 +56,10 @@ import adjustment_blend
 adjustment_blend.show_ui()
 ```
 
-A compact panel: one **Adjustment Blend** button over two toggles — **Signal**
-(Scalar / Vector) and **Mode** (Normal / Smart). Each run is a single undo step,
-and your toggle choices persist across scenes and sessions.
+A compact, **dockable** panel: one **Adjustment Blend** button over two toggles —
+**Signal** (Scalar / Vector) and **Mode** (Normal / Smart). Dock it anywhere and
+Maya remembers the spot; each run is a single undo step; and your toggle choices
+persist across scenes and sessions.
 
 ### Explicit / headless (pipeline, batch, tests)
 
