@@ -6,7 +6,7 @@ Ties the pieces together in four stages:
 1. :func:`build_context`        — validate the scene state, collect adjustment keys.
 2. :func:`collect_attribute_data` — read composite motion via :class:`LayerStack`.
 3. :func:`calculate_adjustment_values` — distribute the adjustment (pure core).
-4. :func:`apply_keyframes`      — write the result back to Maya.
+4. :func:`apply_keyframes`      — write the result back to Maya, as one undo step.
 
 :func:`run` is the public entry point. Call it with no arguments to operate on
 the current selection and the Anim Layer editor's state, or pass
@@ -24,6 +24,7 @@ from typing import Dict, List, Optional, Tuple
 from maya import cmds
 
 from . import core
+from . import maya_keys
 from . import maya_scene
 from . import vector_core
 from .maya_layers import LayerStack
@@ -44,6 +45,7 @@ class AdjustmentContext:
     adjustment_keys: List[float]
     adjustment_key_ranges: List[Tuple[float, float]]
     calculation_range: List[float]
+    stack: LayerStack                  # samples the motion below, shared by the whole run
 
 
 @dataclass
@@ -146,6 +148,7 @@ def build_context(
         adjustment_keys=adjustment_keys_sorted,
         adjustment_key_ranges=adjustment_key_ranges,
         calculation_range=calculation_range,
+        stack=LayerStack(adjustment_layer, calculation_range),
     )
 
 
@@ -166,14 +169,9 @@ def collect_attribute_data(context: AdjustmentContext) -> List[AttributeData]:
         cmds.animLayer(context.adjustment_layer, q=True, attribute=True) or []
     )
 
-    for obj in context.objects:
-        # LayerStack knows how to traverse blend nodes for composite values.
-        try:
-            stack = LayerStack.build(obj, context.adjustment_layer)
-        except Exception as e:  # noqa: BLE001 - surface, don't abort the whole run
-            log.warning("Could not build LayerStack for %s: %s", obj, e)
-            continue
+    flat = [0.0] * len(context.calculation_range)
 
+    for obj in context.objects:
         for attribute in maya_scene.get_animated_attributes(obj):
             _, attr = attribute.split(".")
 
@@ -188,17 +186,14 @@ def collect_attribute_data(context: AdjustmentContext) -> List[AttributeData]:
                 continue
             curve = curve[0] if isinstance(curve, list) else curve
 
-            adjustment_values = []
-            for t in context.calculation_range:
-                value = cmds.keyframe(curve, q=True, valueChange=True, eval=True, time=(t,))
-                adjustment_values.append(value[0] if value else 0.0)
+            adjustment_values = context.stack.curve_values(curve)
 
             if core.is_equal(adjustment_values):
                 skipped["flat_adjustment"].append(attribute)
                 continue
 
             # Composite motion of every layer below, via LayerStack.
-            composite_values = stack.get_base_values(attr, context.calculation_range)
+            composite_values = context.stack.base_values(obj, attr) or flat
             composite_velocity = core.get_velocity_graph(composite_values)
 
             attr_data = AttributeData(
@@ -245,29 +240,25 @@ def calculate_adjustment_values(
 # =============================================================================
 
 def apply_keyframes(
-    attr_data: AttributeData,
-    new_values: List[float],
+    results: List[Tuple[AttributeData, List[float]]],
     context: AdjustmentContext,
 ) -> bool:
-    """Write the densified values back onto the adjustment curve."""
+    """Write the densified values back onto the adjustment curves.
+
+    Every curve is written in one undo step (see :mod:`maya_keys`). If any of
+    them cannot be written, none is.
+    """
     adjustment_range = range(
         int(context.adjustment_key_ranges[0][0]),
         int(context.adjustment_key_ranges[-1][1]) + 1,
     )
+    writes = [(attr_data.adjustment_curve, new_values) for attr_data, new_values in results]
 
     try:
-        for i, frame in enumerate(adjustment_range):
-            if i >= len(new_values):
-                break
-            cmds.setKeyframe(
-                attr_data.adjustment_curve,
-                animLayer=context.adjustment_layer,
-                time=(frame,),
-                value=new_values[i],
-            )
+        maya_keys.write_keys(writes, adjustment_range)
         return True
     except Exception as e:  # noqa: BLE001
-        log.error("Failed to apply keyframes for %s: %s", attr_data.full_attr, e)
+        log.error("Failed to apply keyframes, nothing was changed: %s", e)
         return False
 
 
@@ -287,37 +278,22 @@ def apply_smart_fallbacks(
     1. the other axes of the same channel (``rotateY`` -> ``rotateX``/``rotateZ``), then
     2. the other channels entirely (``rotate`` -> ``translate`` -> ``scale``).
 
-    The :class:`LayerStack` is queried directly, so we can borrow from a sibling
-    attribute even if it isn't keyed on the adjustment layer.
+    The run's shared :class:`LayerStack` is queried directly, so we can borrow
+    from a sibling attribute even if it isn't keyed on the adjustment layer.
     """
     lookup: Dict[str, AttributeData] = {
         f"{ad.obj}.{ad.attr}": ad for ad in attribute_data_list
     }
-    layer_stacks: Dict[str, LayerStack] = {}
+    stack = context.stack
 
     for attr_data in attribute_data_list:
         if attr_data.has_valid_velocity():
             continue
 
-        if attr_data.obj not in layer_stacks:
-            try:
-                layer_stacks[attr_data.obj] = LayerStack.build(
-                    attr_data.obj, context.adjustment_layer
-                )
-            except Exception as e:  # noqa: BLE001
-                log.warning("Could not build LayerStack for %s: %s", attr_data.obj, e)
-                continue
-
-        stack = layer_stacks[attr_data.obj]
-
         # Same channel first, then other channels.
-        fallback_velocity, fallback_source = _find_axis_fallback(
-            attr_data, lookup, stack, context.calculation_range
-        )
+        fallback_velocity, fallback_source = _find_axis_fallback(attr_data, lookup, stack)
         if not fallback_velocity:
-            fallback_velocity, fallback_source = _find_channel_fallback(
-                attr_data, lookup, stack, context.calculation_range
-            )
+            fallback_velocity, fallback_source = _find_channel_fallback(attr_data, lookup, stack)
 
         if fallback_velocity and not core.is_equal(fallback_velocity):
             attr_data.composite_velocity = fallback_velocity
@@ -331,7 +307,6 @@ def _find_axis_fallback(
     attr_data: AttributeData,
     lookup: Dict[str, AttributeData],
     stack: LayerStack,
-    calculation_range: List[float],
 ) -> Tuple[Optional[List[float]], Optional[str]]:
     """Borrow motion from another axis of the same channel.
 
@@ -349,14 +324,11 @@ def _find_axis_fallback(
     for other_attr in other_axes:
         key = f"{attr_data.obj}.{other_attr}"
         velocity = None
-        composite_values = None
+        composite_values = stack.base_values(attr_data.obj, other_attr)
 
         if key in lookup and lookup[key].has_valid_velocity():
             velocity = lookup[key].composite_velocity[:]
-            if stack.ensure_contribution(other_attr):
-                composite_values = stack.get_base_values(other_attr, calculation_range)
-        elif stack.ensure_contribution(other_attr):
-            composite_values = stack.get_base_values(other_attr, calculation_range)
+        elif composite_values:
             velocity = core.get_velocity_graph(composite_values)
 
         if velocity and not core.is_equal(velocity) and composite_values:
@@ -384,7 +356,6 @@ def _find_channel_fallback(
     attr_data: AttributeData,
     lookup: Dict[str, AttributeData],
     stack: LayerStack,
-    calculation_range: List[float],
 ) -> Tuple[Optional[List[float]], Optional[str]]:
     """Borrow motion from another channel, choosing the hottest one available."""
     best_velocity = None
@@ -398,11 +369,9 @@ def _find_channel_fallback(
 
             if key in lookup and lookup[key].has_valid_velocity():
                 velocity = lookup[key].composite_velocity
-            elif stack.ensure_contribution(other_attr):
-                composite_values = stack.get_base_values(other_attr, calculation_range)
-                velocity = core.get_velocity_graph(composite_values)
             else:
-                velocity = None
+                composite_values = stack.base_values(attr_data.obj, other_attr)
+                velocity = core.get_velocity_graph(composite_values) if composite_values else None
 
             if velocity and not core.is_equal(velocity):
                 max_vel = max(velocity)
@@ -493,21 +462,18 @@ def run(
     raise ValueError(f"Unknown signal {signal!r}; expected 'scalar' or 'vector'.")
 
 
-def _emit(processed, attr_data, new_values, context, apply):
-    """Apply (or, in a dry run, just record) one attribute's new values."""
+def _finish(results, context, apply, label):
+    """Apply (or, in a dry run, just report) every attribute's new values."""
+    processed = [attr_data.full_attr for attr_data, _ in results]
     if not apply:
-        processed.append(attr_data.full_attr)
-    elif apply_keyframes(attr_data, new_values, context):
-        processed.append(attr_data.full_attr)
-
-
-def _report(processed, apply, label):
-    if apply:
-        log.info("Adjusted attributes (%s): %s", label, processed)
-    else:
         cmds.warning(
             f"apply=False: dry run, no keyframes written. Would adjust ({label}): {processed}"
         )
+        return bool(processed)
+
+    if results and not apply_keyframes(results, context):
+        return False
+    log.info("Adjusted attributes (%s): %s", label, processed)
     return bool(processed)
 
 
@@ -526,12 +492,11 @@ def _run_scalar(context: AdjustmentContext, *, smart: bool, apply: bool) -> bool
         cmds.warning("No attributes have valid velocity data to process!")
         return False
 
-    processed: List[str] = []
-    for attr_data in valid_attributes:
-        new_values = calculate_adjustment_values(attr_data, context)
-        _emit(processed, attr_data, new_values, context, apply)
-
-    return _report(processed, apply, "scalar")
+    results = [
+        (attr_data, calculate_adjustment_values(attr_data, context))
+        for attr_data in valid_attributes
+    ]
+    return _finish(results, context, apply, "scalar")
 
 
 def _run_vector(context: AdjustmentContext, *, smart: bool, apply: bool) -> bool:
@@ -552,15 +517,10 @@ def _run_vector(context: AdjustmentContext, *, smart: bool, apply: bool) -> bool
     # compute every group so a static group can borrow from a moving one.
     obj_speeds: Dict[str, Dict[str, List[float]]] = {}
     for obj, groups in obj_groups.items():
-        try:
-            stack = LayerStack.build(obj, context.adjustment_layer)
-        except Exception as e:  # noqa: BLE001
-            log.warning("Could not build LayerStack for %s: %s", obj, e)
-            continue
         needed = set(core.CHANNELS) if smart else set(groups)
-        obj_speeds[obj] = _group_speeds(obj, needed, stack, context.calculation_range)
+        obj_speeds[obj] = _group_speeds(obj, needed, context.stack)
 
-    processed: List[str] = []
+    results: List[Tuple[AttributeData, List[float]]] = []
     left_sparse: List[str] = []
     for ad in attribute_data_list:
         speeds = obj_speeds.get(ad.obj)
@@ -590,32 +550,27 @@ def _run_vector(context: AdjustmentContext, *, smart: bool, apply: bool) -> bool
             speed, ad.adjustment_values,
             context.adjustment_key_ranges, context.calculation_range,
         )
-        _emit(processed, ad, new_values, context, apply)
+        results.append((ad, new_values))
 
     if left_sparse:
         log.debug("Vector: no motion to ride, left sparse: %s", left_sparse)
 
-    return _report(processed, apply, "vector")
+    return _finish(results, context, apply, "vector")
 
 
 def _group_speeds(
     obj: str,
     groups: set,
     stack: LayerStack,
-    calc_range: List[float],
 ) -> Dict[str, List[float]]:
     """Sample the below-motion for each axis of each group and reduce to speed."""
     speeds: Dict[str, List[float]] = {}
-    n = len(calc_range)
+    flat = [0.0] * len(stack.times)
 
     for group in groups:
         axes: Dict[str, List[float]] = {}
         for axis in ("X", "Y", "Z"):
-            attr = group + axis
-            if stack.ensure_contribution(attr):
-                axes[axis] = stack.get_base_values(attr, calc_range)
-            else:
-                axes[axis] = [0.0] * n
+            axes[axis] = stack.base_values(obj, group + axis) or flat
 
         order = "xyz"
         if group == "rotate":

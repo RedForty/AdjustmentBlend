@@ -75,11 +75,17 @@ def euler_to_quat(rx_deg, ry_deg, rz_deg, order="xyz") -> Tuple[float, float, fl
 
 
 def _quat_geodesic_angle(q1, q2) -> float:
-    """Shortest rotation angle (radians) between two orientation quaternions."""
-    dot = q1[0] * q2[0] + q1[1] * q2[1] + q1[2] * q2[2] + q1[3] * q2[3]
-    # abs() handles quaternion double-cover; clamp guards float error.
-    dot = min(1.0, abs(dot))
-    return 2.0 * math.acos(dot)
+    """Shortest rotation angle (radians) between two orientation quaternions.
+
+    Measured from the chord between the two quaternions rather than acos(dot):
+    the chord is exactly zero for identical orientations, where acos turns
+    rounding error into a small non-zero speed and a held rotation looks like
+    it is moving.
+    """
+    minus = math.sqrt(sum((a - b) ** 2 for a, b in zip(q1, q2)))
+    plus = math.sqrt(sum((a + b) ** 2 for a, b in zip(q1, q2)))
+    # q and -q are the same orientation (double cover): take the shorter chord.
+    return 4.0 * math.asin(min(1.0, 0.5 * min(minus, plus)))
 
 
 # =============================================================================

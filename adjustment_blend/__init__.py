@@ -58,7 +58,7 @@ def reload_all():
 
     pkg = __name__
     # Leaves first, package last, so each reload sees fresh dependencies.
-    for sub in ("core", "vector_core", "maya_layers", "maya_scene", "pipeline", "ui"):
+    for sub in ("core", "vector_core", "maya_layers", "maya_keys", "maya_scene", "pipeline", "ui"):
         module = sys.modules.get(f"{pkg}.{sub}")
         if module is not None:
             importlib.reload(module)
