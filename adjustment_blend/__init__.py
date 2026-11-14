@@ -47,7 +47,7 @@ def reload_all():
     dependency order and refreshes this package's own bindings in place, so your
     existing import keeps working (no reassignment needed)::
 
-        from klugTools import adjustment_blend
+        import adjustment_blend
         adjustment_blend.reload_all()
         adjustment_blend.show_ui()
 

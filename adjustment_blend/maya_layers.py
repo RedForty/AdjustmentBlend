@@ -7,7 +7,6 @@ every layer below a target layer. The adjustment-blend pipeline uses it to read
 the motion underneath the adjustment layer without caring how Maya wired the
 blend nodes together.
 
-Extracted from the original ``animLib`` so the tool can ship standalone.
 """
 
 from __future__ import annotations

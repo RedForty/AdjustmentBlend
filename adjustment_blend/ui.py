@@ -43,7 +43,7 @@ def show():
     # The uiScript lets Maya (re)build the panel's contents on demand — when it
     # is docked, floated, restored from a saved layout, or rebuilt on startup.
     # Build the call from this module's real name so it resolves whatever the
-    # install path is (klugTools.adjustment_blend.ui, adjustment_blend.ui, ...).
+    # install path is (adjustment_blend.ui, ...).
     ui_script = f"import {__name__} as _ab_ui; _ab_ui._build_ui()"
 
     cmds.workspaceControl(
@@ -65,7 +65,7 @@ def _build_ui():
     from . import build_stamp
 
     cmds.columnLayout(adjustableColumn=True, rowSpacing=4,
-                      columnAttach=("both", 8), width=140)
+                      columnAttach=("both", 8), width=200)
 
     cmds.separator(height=3, style="none")
 
