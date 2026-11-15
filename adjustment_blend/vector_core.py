@@ -24,7 +24,7 @@ from __future__ import annotations
 import math
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from .core import is_equal, map_from_to, normalize_values
+from .core import distribute_adjustment, is_still
 
 # Maya rotateOrder enum -> axis order string.
 ROTATE_ORDER_NAMES = {0: "xyz", 1: "yzx", 2: "zxy", 3: "xzy", 4: "yxz", 5: "zyx"}
@@ -75,11 +75,17 @@ def euler_to_quat(rx_deg, ry_deg, rz_deg, order="xyz") -> Tuple[float, float, fl
 
 
 def _quat_geodesic_angle(q1, q2) -> float:
-    """Shortest rotation angle (radians) between two orientation quaternions."""
-    dot = q1[0] * q2[0] + q1[1] * q2[1] + q1[2] * q2[2] + q1[3] * q2[3]
-    # abs() handles quaternion double-cover; clamp guards float error.
-    dot = min(1.0, abs(dot))
-    return 2.0 * math.acos(dot)
+    """Shortest rotation angle (radians) between two orientation quaternions.
+
+    Measured from the chord between the two quaternions rather than acos(dot):
+    the chord is exactly zero for identical orientations, where acos turns
+    rounding error into a small non-zero speed and a held rotation looks like
+    it is moving.
+    """
+    minus = math.sqrt(sum((a - b) ** 2 for a, b in zip(q1, q2)))
+    plus = math.sqrt(sum((a + b) ** 2 for a, b in zip(q1, q2)))
+    # q and -q are the same orientation (double cover): take the shorter chord.
+    return 4.0 * math.asin(min(1.0, 0.5 * min(minus, plus)))
 
 
 # =============================================================================
@@ -149,7 +155,7 @@ def hottest_group(speeds: Dict[str, Sequence[float]], exclude: str = "") -> Opti
     """
     best: Optional[Tuple[str, list, float]] = None
     for name, speed in speeds.items():
-        if name == exclude or is_equal(speed):
+        if name == exclude or is_still(speed):
             continue
         peak = max(speed)
         if best is None or peak > best[2]:
@@ -160,26 +166,8 @@ def hottest_group(speeds: Dict[str, Sequence[float]], exclude: str = "") -> Opti
 
 
 # =============================================================================
-# Distribution driven by a speed signal (with linear fallback)
+# Distribution driven by a speed signal
 # =============================================================================
-
-def _segment_weights(speed_slice: Sequence[float]) -> List[float]:
-    """Normalized per-frame weights (summing to 100) for one segment.
-
-    If the segment carries motion, weights follow the speed. If it's flat
-    (genuinely no motion to ride), fall back to an even *linear* spread with a
-    leading zero so the endpoints stay exact -- which also fixes the old
-    "hold then jump at the boundary" artifact for motionless segments.
-    """
-    if not is_equal(speed_slice) and sum(speed_slice) > 0.0:
-        return normalize_values(speed_slice)
-
-    n = len(speed_slice)
-    if n <= 1:
-        return [0.0] * n
-    step = 100.0 / (n - 1)
-    return [0.0] + [step] * (n - 1)
-
 
 def distribute_by_speed(
     speed: Sequence[float],
@@ -189,29 +177,8 @@ def distribute_by_speed(
 ) -> List[float]:
     """Distribute the adjustment across frames, weighted by a group speed signal.
 
-    Same arc-length idea as :func:`adjustment_blend.core.distribute_adjustment`,
-    but the weighting comes from a shared per-group speed and flat segments
-    distribute linearly instead of collapsing.
+    The distribution is :func:`adjustment_blend.core.distribute_adjustment`.
+    Only the signal differs: one shared speed per channel group instead of each
+    attribute's own.
     """
-    calc = list(calculation_range)
-    new_values: List[float] = []
-    emitted_frames = set()
-
-    for start_frame, end_frame in key_ranges:
-        start_idx = calc.index(start_frame)
-        end_idx = calc.index(end_frame) + 1
-
-        weights = _segment_weights(speed[start_idx:end_idx])
-
-        adj_start = adjustment_values[start_idx]
-        adj_end = adjustment_values[end_idx - 1]
-
-        running = 0.0
-        for i, frame in enumerate(range(int(start_frame), int(end_frame) + 1)):
-            running += weights[i]
-            value = map_from_to(running, 0.0, 100.0, adj_start, adj_end)
-            if frame not in emitted_frames:
-                new_values.append(value)
-                emitted_frames.add(frame)
-
-    return new_values
+    return distribute_adjustment(speed, adjustment_values, key_ranges, calculation_range)

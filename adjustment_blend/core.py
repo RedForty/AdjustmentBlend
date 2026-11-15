@@ -44,6 +44,14 @@ def normalize_attr_name(attr: str) -> str:
     return SHORT_TO_LONG.get(attr, attr)
 
 
+# A channel counts as still when no frame-to-frame step is larger than this,
+# in the channel's own units (UI units, degrees, radians for the vector signal).
+# Baked and imported keys on a channel that does not move still differ by
+# rounding noise, around 1e-9 or less. Followed as if it were motion, that noise
+# spreads an offset straight through a hold.
+STILL_TOLERANCE = 1e-6
+
+
 # =============================================================================
 # Small numeric helpers
 # =============================================================================
@@ -51,10 +59,19 @@ def normalize_attr_name(attr: str) -> str:
 def is_equal(values: Sequence[float]) -> bool:
     """Return ``True`` if every element is identical (or the list is empty).
 
-    Used throughout to detect "flat" graphs that carry no motion and therefore
-    cannot drive a velocity-matched distribution.
+    Used on the adjustment curve itself, to skip one that changes nothing. For
+    "is the motion below still?" use :func:`is_still`, which allows for noise.
     """
     return not values or list(values).count(values[0]) == len(values)
+
+
+def is_still(speed: Sequence[float], tolerance: float = STILL_TOLERANCE) -> bool:
+    """Return ``True`` if a speed graph carries no motion worth following.
+
+    ``speed`` is a graph from :func:`get_velocity_graph` or one of the group
+    speeds. Steps up to ``tolerance`` are rounding noise, not motion.
+    """
+    return not speed or max(speed) <= tolerance
 
 
 def map_from_to(x: float, a: float, b: float, c: float, d: float) -> float:
@@ -141,6 +158,30 @@ def get_other_channel(channel: str) -> List[str]:
 # The algorithm: velocity-matched distribution
 # =============================================================================
 
+def segment_weights(speed: Sequence[float]) -> List[float]:
+    """Return the share of a segment's change that lands on each frame.
+
+    ``speed`` holds one sample per frame of the segment, from its first key to
+    its last. The shares add up to 100.
+
+    The first sample is the motion that *arrived* at the segment's first key.
+    It belongs to the segment before, so it gets no share: the first frame
+    keeps the first key's value. Counting it made every segment after the
+    first start with a jump.
+
+    A segment with no motion to follow (see :func:`is_still`) spreads its
+    change evenly. With no share to hand out it would hold the first key's
+    value to the end and overwrite the key that ends it.
+    """
+    rest = speed[1:]
+    if not rest:
+        return [0.0] * len(speed)
+    if is_still(rest):
+        return [0.0] + [100.0 / len(rest)] * len(rest)
+    scale = 100.0 / sum(rest)
+    return [0.0] + [sample * scale for sample in rest]
+
+
 def distribute_adjustment(
     composite_velocity: Sequence[float],
     adjustment_values: Sequence[float],
@@ -163,34 +204,37 @@ def distribute_adjustment(
     we walk each segment and hand out the segment's total value change in
     proportion to where motion actually happens. Frames where the lower layers
     move fast absorb a large share of the change; held frames barely move. The
-    endpoints always land exactly on the artist's keyed values.
+    endpoints always land exactly on the artist's keyed values. A segment with
+    no motion below it spreads its change evenly (see :func:`segment_weights`).
 
-    The returned list contains one value per whole frame from the first key to
-    the last, with the shared frame between adjacent segments emitted once.
+    ``key_ranges`` must be in order and joined end to end, as the gaps between
+    one curve's keys are.
+
+    The returned list contains one value per sample of ``calculation_range``
+    from the first key to the last, with the sample shared by two segments
+    emitted once.
     """
+    position = {frame: index for index, frame in enumerate(calculation_range)}
     new_values: List[float] = []
-    emitted_frames = set()
 
-    for start_frame, end_frame in key_ranges:
-        start_idx = list(calculation_range).index(start_frame)
-        end_idx = list(calculation_range).index(end_frame) + 1
+    for segment, (start_frame, end_frame) in enumerate(key_ranges):
+        start_idx = position[start_frame]
+        end_idx = position[end_frame] + 1
 
-        velocity_slice = composite_velocity[start_idx:end_idx]
-        normalized_velocity = normalize_values(velocity_slice)
+        weights = segment_weights(composite_velocity[start_idx:end_idx])
 
         adj_start = adjustment_values[start_idx]
         adj_end = adjustment_values[end_idx - 1]
 
-        # Accumulate normalized motion (0 -> 100%) across the segment and map
-        # that running percentage onto the segment's value change.
+        # Accumulate the shares (0 -> 100%) across the segment and map that
+        # running percentage onto the segment's value change. The first sample
+        # of a later segment is the key it shares with the segment before.
         sum_percentage = 0.0
-        for i, frame in enumerate(range(int(start_frame), int(end_frame) + 1)):
-            sum_percentage += normalized_velocity[i]
-            new_value = map_from_to(sum_percentage, 0.0, 100.0, adj_start, adj_end)
-
-            # The boundary frame is shared by two segments; emit it only once.
-            if frame not in emitted_frames:
-                new_values.append(new_value)
-                emitted_frames.add(frame)
+        last = len(weights) - 1
+        for i in range(0 if segment == 0 else 1, last):
+            sum_percentage += weights[i]
+            new_values.append(map_from_to(sum_percentage, 0.0, 100.0, adj_start, adj_end))
+        # The shares add up to 100 only to rounding. The end key is exact.
+        new_values.append(adj_end)
 
     return new_values

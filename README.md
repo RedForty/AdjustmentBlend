@@ -43,8 +43,9 @@ import adjustment_blend
 adjustment_blend.run(smart=True)
 ```
 
-With no arguments, `run()` reads the adjustment layer and the stack beneath it
-from the Anim Layer editor and operates on your current selection.
+With no arguments, `run()` takes the selected animation layer as the adjustment
+layer and operates on your current selection. With several layers selected it
+takes the topmost of them; with none selected, the top of the stack.
 
 ### UI
 
@@ -63,14 +64,13 @@ persist across scenes and sessions.
 
 ### Explicit / headless (pipeline, batch, tests)
 
-Pass the layer context yourself to skip all UI queries:
+Name the layer and the objects yourself:
 
 ```python
 import adjustment_blend
 
 adjustment_blend.run(
     adjustment_layer="AnimLayer1",
-    layers_below=["BaseAnimation"],
     objects=["pCube1"],
     smart=True,
 )
@@ -80,8 +80,7 @@ adjustment_blend.run(
 
 | Argument           | Default      | Meaning                                                                 |
 | ------------------ | ------------ | ----------------------------------------------------------------------- |
-| `adjustment_layer` | *discovered* | Target layer to densify. Read from the UI when omitted.                 |
-| `layers_below`     | *discovered* | Ordered layers to composite motion from. Read from the UI when omitted. |
+| `adjustment_layer` | *discovered* | Target layer to densify. The selected layer when omitted.               |
 | `objects`          | *selection*  | Objects to process. Falls back to selection, then to layer members.     |
 | `signal`           | `"scalar"`   | Motion signal. `"scalar"` = per-attribute velocity. `"vector"` (experimental) = one shared speed per channel group. |
 | `smart`            | `False`      | Enable fallbacks when an attribute has no motion of its own (see below). |
@@ -118,8 +117,7 @@ single speed — translation speed for `translate`, geodesic **angular speed** f
 for `scale`. Because all three axes share one signal, a flat axis automatically
 rides whatever its siblings are doing below, so the sibling-axis fallback is no
 longer needed. In this mode `smart` governs only the last-resort *cross-channel*
-borrow (e.g. a fully static rotation group riding translation). Flat segments
-distribute linearly rather than collapsing.
+borrow (e.g. a fully static rotation group riding translation).
 
 The algorithm lives in `adjustment_blend/vector_core.py` (pure, unit tested).
 It's opt-in while it gets real-scene mileage; the scalar path is unchanged.
@@ -129,11 +127,18 @@ It's opt-in while it gets real-scene mileage; the scalar path is unchanged.
 ```
 adjustment_blend/
 ├── core.py          # pure algorithm — no Maya, fully unit tested
-├── maya_layers.py   # LayerStack: walks Maya's blend-node chains
-├── maya_scene.py    # scene I/O + layer discovery (the only UI dependency)
-└── pipeline.py      # orchestration + the public run() entry point
+├── vector_core.py   # the vector signal — no Maya, unit tested
+├── maya_layers.py   # LayerStack: reads the motion below a layer by curve math
+├── maya_keys.py     # writes the keys in bulk, as one undo step
+├── maya_scene.py    # scene I/O + layer discovery
+├── pipeline.py      # orchestration + the public run() entry point
+├── ui.py            # the dockable panel
+├── plug-ins/
+│   └── adjustmentBlendKeys.py   # the undo command, loaded on first use
+└── tests/           # scene tests (run with mayapy)
 tests/
-└── test_core.py     # algorithm tests (run with plain pytest, no Maya)
+├── test_core.py         # algorithm tests (run with plain pytest, no Maya)
+└── test_vector_core.py
 ```
 
 The algorithm lives entirely in `core.py` with **no Maya dependency**, so it can
@@ -147,14 +152,30 @@ pip install -e ".[dev]"
 pytest
 ```
 
-The test suite covers the pure core and needs no Maya install.
+`pytest` covers the pure core and needs no Maya install.
+
+The scene tests build their scenes in code and run in Maya's Python:
+
+```bash
+mayapy adjustment_blend/tests/run.py
+```
+
+They compare `LayerStack` with Maya's own values for each layer setting, check
+the blend on a move-hold-move-hold performance, and check undo and redo. To
+build the standard test scene in an open Maya:
+
+```python
+from adjustment_blend.tests import scenes
+scenes.move_hold_move_hold()
+```
 
 ## Known limitations
 
-- Segments are evaluated independently; an adjustment spanning a region where
-  the base animation is flat in one segment but not another can produce uneven
-  results (smart mode mitigates this).
-- Override layers are treated as additive.
+- Segments are evaluated independently. A segment with no motion below it has
+  nothing to follow, so its change is spread evenly across the segment.
+- `run()` no longer takes `layers_below` (removed in 0.2.0). The motion to
+  follow is whatever Maya composites below the adjustment layer.
+- See [REVIEW.md](REVIEW.md) for the open items.
 
 ## License
 

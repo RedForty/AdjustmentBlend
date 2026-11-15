@@ -57,6 +57,21 @@ def test_is_equal_detects_motion():
 
 
 # ---------------------------------------------------------------------------
+# is_still
+# ---------------------------------------------------------------------------
+
+def test_is_still_ignores_rounding_noise():
+    assert core.is_still([])
+    assert core.is_still([0.0, 0.0, 0.0])
+    assert core.is_still([0.0, 3e-10, 8e-10, 1e-9])
+
+
+def test_is_still_detects_motion():
+    assert not core.is_still([0.0, 0.0, 0.01])
+    assert not core.is_still([0.0, 2.0, 2.0, 2.0])   # constant speed is motion
+
+
+# ---------------------------------------------------------------------------
 # get_velocity_graph
 # ---------------------------------------------------------------------------
 
@@ -191,9 +206,57 @@ def test_distribute_multi_segment_lands_on_each_key():
     assert math.isclose(out[-1], 60.0)
 
 
-def test_distribute_flat_segment_holds_at_start():
-    # No motion below -> nothing to distribute against -> the curve holds at the
-    # segment start (a documented limitation handled upstream by smart fallback).
-    velocity = [0.0, 0.0, 0.0, 0.0]
-    out = _single_segment(velocity, 0.0, 100.0)
-    assert all(math.isclose(v, 0.0) for v in out[:-1])
+def test_distribute_flat_segment_spreads_evenly():
+    # No motion below -> nothing to distribute against -> an even spread that
+    # still lands on the end key. (It used to hold at the segment start and
+    # overwrite the end key with the start value.)
+    velocity = [0.0, 0.0, 0.0, 0.0, 0.0]
+    out = _single_segment(velocity, 0.0, 40.0)
+    assert [round(v, 6) for v in out] == [0.0, 10.0, 20.0, 30.0, 40.0]
+
+
+def test_distribute_second_segment_ignores_motion_before_its_first_key():
+    # Constant speed, keys at 0, 4 and 8. The speed sample at frame 4 is the
+    # motion from frame 3 to 4: it belongs to the first segment. Counting it in
+    # the second gave 10, 14, 16, 18, 20 instead of even steps.
+    calc = [float(i) for i in range(9)]
+    velocity = [0.0] + [1.0] * 8
+    adjustment = [0.0, 0.0, 0.0, 0.0, 10.0, 0.0, 0.0, 0.0, 20.0]
+    out = core.distribute_adjustment(velocity, adjustment, [(0.0, 4.0), (4.0, 8.0)], calc)
+    assert [round(v, 6) for v in out] == [0.0, 2.5, 5.0, 7.5, 10.0, 12.5, 15.0, 17.5, 20.0]
+
+
+def test_distribute_hold_in_second_segment_does_not_pop():
+    # The motion stops at the middle key. The second segment has nothing to
+    # follow, so it spreads evenly. It used to put the whole change on the
+    # frame after the key: 10, 20, 20, 20, 20.
+    calc = [float(i) for i in range(9)]
+    velocity = [0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0]
+    adjustment = [0.0, 0.0, 0.0, 0.0, 10.0, 0.0, 0.0, 0.0, 20.0]
+    out = core.distribute_adjustment(velocity, adjustment, [(0.0, 4.0), (4.0, 8.0)], calc)
+    assert [round(v, 6) for v in out[4:]] == [10.0, 12.5, 15.0, 17.5, 20.0]
+
+
+def test_distribute_hold_in_first_segment_keeps_the_middle_key():
+    # Nothing moves before the middle key. That key was set to 10 and used to
+    # come out as 0.
+    calc = [float(i) for i in range(9)]
+    velocity = [0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0]
+    adjustment = [0.0, 0.0, 0.0, 0.0, 10.0, 0.0, 0.0, 0.0, 20.0]
+    out = core.distribute_adjustment(velocity, adjustment, [(0.0, 4.0), (4.0, 8.0)], calc)
+    assert [round(v, 6) for v in out] == [0.0, 2.5, 5.0, 7.5, 10.0, 12.5, 15.0, 17.5, 20.0]
+
+
+def test_distribute_noise_on_a_still_segment_is_not_followed():
+    # A still channel with rounding noise: following the noise would hand out
+    # the change in uneven steps. It must spread evenly instead.
+    velocity = [0.0, 9e-10, 1e-10, 7e-10, 2e-10]
+    out = _single_segment(velocity, 0.0, 40.0)
+    assert [round(v, 6) for v in out] == [0.0, 10.0, 20.0, 30.0, 40.0]
+
+
+def test_segment_weights_sum_to_100_and_skip_the_first_sample():
+    weights = core.segment_weights([7.0, 1.0, 3.0])
+    assert weights[0] == 0.0
+    assert math.isclose(sum(weights), 100.0)
+    assert [round(w, 6) for w in weights] == [0.0, 25.0, 75.0]

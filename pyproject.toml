@@ -25,7 +25,11 @@ Homepage = "https://github.com/RedForty/AdjustmentBlend"
 Source = "https://github.com/RedForty/AdjustmentBlend"
 
 [tool.setuptools]
-packages = ["adjustment_blend"]
+packages = ["adjustment_blend", "adjustment_blend.tests"]
+
+[tool.setuptools.package-data]
+# The undo command for key writing. maya_keys.py loads it by path.
+adjustment_blend = ["plug-ins/*.py"]
 
 [tool.setuptools.dynamic]
 version = { attr = "adjustment_blend.__version__" }
