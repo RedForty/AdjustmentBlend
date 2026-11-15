@@ -2,13 +2,15 @@
 Writes keys onto anim curves in bulk, as one undo step.
 
 ``cmds.setKeyframe`` costs a command call per key. ``MFnAnimCurve.addKeys``
-takes a whole curve's keys in one call and is 10 to 50 times faster, but two
-things about it are not obvious (both checked in Maya 2025):
+takes a whole curve's keys in one call and is 10 to 50 times faster, but three
+things about it are not obvious (all checked in Maya 2025):
 
 * It does not change a key that already exists at one of the times, so those
   keys are set with ``setValue`` and only the new times go to ``addKeys``.
   A key that already exists keeps its tangents, as it does with
   ``cmds.setKeyframe``.
+* It does not tell the Graph Editor that the curve changed, so one key is
+  edited to its own value afterwards, which does.
 * API edits are not on Maya's undo queue. They are recorded in an
   ``MAnimCurveChange``, which the ``adjustmentBlendKeys`` command (in
   ``plug-ins/``) takes over and replays for Edit > Undo and Redo.
@@ -119,3 +121,7 @@ def _write(writes, change: oma.MAnimCurveChange) -> None:
             new_values = om.MDoubleArray(
                 [values[i] * to_internal for i in range(len(frames)) if i not in keyed])
             curve_fn.addKeys(times, new_values, tangent, tangent, True, change)
+            # addKeys does not send Maya's "curve edited" message, so the Graph
+            # Editor would go on drawing the old curve. An edit of one key
+            # sends it. Recorded in the change, it sends it on redo as well.
+            curve_fn.setIsBreakdown(0, curve_fn.isBreakdown(0), change)
