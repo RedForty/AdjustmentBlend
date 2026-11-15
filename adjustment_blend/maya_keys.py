@@ -33,14 +33,12 @@ _PLUGIN = os.path.join(os.path.dirname(os.path.abspath(__file__)), "plug-ins", C
 _handoff: Optional[oma.MAnimCurveChange] = None
 
 
-def write_keys(writes: Sequence[Tuple[str, Sequence[float]]], frames: Sequence[float]) -> None:
-    """Key every curve on every frame, as one undo step.
+def write_keys(writes: Sequence[Tuple[str, Sequence[float], Sequence[float]]]) -> None:
+    """Key every curve on its frames, as one undo step.
 
     Args:
-        writes: ``(anim curve name, values)`` pairs. ``values`` holds one value
-            per frame, in UI units (degrees for a rotation curve); values past
-            the last frame are ignored.
-        frames: The times to key, the same for every curve.
+        writes: ``(anim curve name, frames, values)`` triples, with one value
+            per frame, in UI units (degrees for a rotation curve).
 
     Either every curve is written or, on an error, none is.
     """
@@ -52,7 +50,7 @@ def write_keys(writes: Sequence[Tuple[str, Sequence[float]]], frames: Sequence[f
 
     change = oma.MAnimCurveChange()
     try:
-        _write(writes, frames, change)
+        _write(writes, change)
         _handoff = change
         getattr(cmds, COMMAND)()
     except Exception:
@@ -74,21 +72,29 @@ def take_change() -> oma.MAnimCurveChange:
     return change
 
 
-def _write(writes, frames, change: oma.MAnimCurveChange) -> None:
+def _write(writes, change: oma.MAnimCurveChange) -> None:
     unit = om.MTime.uiUnit()
-    frames = [float(frame) for frame in frames]
-    mtimes = [om.MTime(frame, unit) for frame in frames]
-    position = {frame: i for i, frame in enumerate(frames)}
     tangent = oma.MFnAnimCurve.kTangentGlobal  # the user's default, as cmds.setKeyframe uses
 
-    # The times that still need a key, by which frames are keyed already.
-    # Nearly every curve has the same few keys, so they share one array.
-    new_times: Dict[Tuple[int, ...], om.MTimeArray] = {}
+    # Per set of frames: where each frame sits, its MTime, and the times that
+    # still need a key by which frames are keyed already. Nearly every curve
+    # has the same frames and the same few keys, so they share these.
+    grids: Dict[Tuple[float, ...], tuple] = {}
 
     selection = om.MSelectionList()
-    for curve, values in writes:
-        if len(values) < len(frames):
+    for curve, frames, values in writes:
+        if len(values) != len(frames):
             raise ValueError(f"{curve}: {len(values)} values for {len(frames)} frames")
+        grid = grids.get(tuple(frames))
+        if grid is None:
+            floats = [float(frame) for frame in frames]
+            grid = grids[tuple(frames)] = (
+                {frame: i for i, frame in enumerate(floats)},
+                [om.MTime(frame, unit) for frame in floats],
+                {},
+            )
+        position, mtimes, new_times = grid
+
         selection.clear()
         selection.add(curve)
         curve_fn = oma.MFnAnimCurve(selection.getDependNode(0))

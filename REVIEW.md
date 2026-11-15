@@ -16,33 +16,13 @@ Size is my guess at the work: small is under an hour, medium is an afternoon.
 
 | ID | Severity | Item | Size |
 |---|---|---|---|
-| AB-02 | High | Key times from every control and attribute are merged | medium |
 | AB-04 | Medium | With two layers selected, name order picks the adjustment layer | small |
 | AB-05 | Medium | `layers_below` does nothing | small |
 | AB-06 | Medium | A failed run reads as "nothing to process" | small |
-| AB-07 | Medium | A third of a run goes to listing animated attributes | medium |
-| AB-08 | Low | A key on a fractional frame leaves a stray key | small |
 | AB-10 | Low | Two signals, Scalar and Vector, do the same job | decision |
-| AB-11 | Low | Smart fallback writes borrowed speed into shared data | small |
 | AB-12 | Low | Fields and code that nothing reads | small |
 | AB-13 | Low | Four small things | small |
 | AB-15 | Low | `scripts/adjustmentBlend.py` is a legacy copy of the tool | small |
-
-### AB-02 High. Key times from every control and attribute are merged
-
-Where: `maya_scene.py:144-165`, `pipeline.py:122-137`.
-
-The run collects the key times of every curve into one set and cuts every curve at all of them. A curve gets spans it has no keys for. Each of those spans is blended by itself, so the offset no longer arrives in step with the motion over the artist's own span.
-
-Measured:
-
-- Control `a` is keyed at 0 and 40. Blended alone it holds from frame 30 to 40. Blended together with `b`, keyed at 0 and 30, `a` is 5.06 at frame 30 and drifts to 6.0 by frame 40. It moves 0.94 during a hold, in all four modes. Before the fix for the keys-in-the-middle bug this was a one-frame pop.
-- One control with translateX keyed at 0 and 40 and rotateY keyed at 0, 25 and 40. translateX moves by up to 0.24 of its 6.0 offset compared with blending translateX alone.
-- `b` gets keys out to frame 40, fifteen frames past its last key.
-
-The existing check `blend, two controls that hold at different times` does not catch this because both controls have the same key times.
-
-Fix: build the spans per curve from that curve's own keys. AB-07 is the same change seen from the speed side.
 
 ### AB-04 Medium. With two layers selected, name order picks the adjustment layer
 
@@ -74,52 +54,17 @@ The panel catches every exception, logs the traceback and sets the result to Fal
 
 Fix: a separate message for a failure, pointing at the Script Editor.
 
-### AB-07 Medium. A third of a run goes to listing animated attributes
-
-Where: `maya_scene.py:96-120`, called from `maya_scene.py:153` and `pipeline.py:175`.
-
-Profile of a full run, 100 controls by 120 frames, 0.37 s:
-
-| Part | Time |
-|---|---|
-| `get_animated_attributes`, twice per control | 0.12 s |
-| `distribute_adjustment` | 0.07 s |
-| Writing 108,000 keys | 0.04 s |
-| Reading the motion below | 0.04 s |
-| Everything else | 0.10 s |
-
-Fix: walk the adjustment layer's own curves once instead of asking each control for its animated plugs. That also removes the OpenMaya 1.0 code and the repeated membership queries, and it is the loop AB-02 needs. I expect about 0.1 s back at 100 controls. That is an estimate, so benchmark it.
-
-`distribute_adjustment` can also lose time: it calls `list(calculation_range).index` for every span and `map_from_to` once per key, 108,000 calls here.
-
-### AB-08 Low. A key on a fractional frame leaves a stray key
-
-Where: `core.py:101-111`, `core.py:212`, `pipeline.py:251-254`.
-
-Measured with the first key at frame 0.5: the run writes a key at frame 0, before the artist's first key, holding 0.0174 of a 6.0 offset. Every other frame is within that of the right value. I rated this higher in the review. Measured, it is small.
-
-Fix: write only the whole frames strictly between a span's two keys. Do it with AB-02.
-
 ### AB-10 Low. Two signals, Scalar and Vector, do the same job
 
 Where: `pipeline.py:269-383`, `core.py:114-137`.
 
 Scalar with Smart needs `apply_smart_fallbacks`, `_find_axis_fallback`, `_find_channel_fallback`, `get_other_axis` and `get_other_channel`, about 140 lines, to let a still axis follow a moving one. Vector's shared speed per channel does that with no fallback code.
 
-Decision for you, from use: if Vector feels right on real shots, delete Scalar and the Signal toggle. AB-11 goes with it.
-
-### AB-11 Low. Smart fallback writes borrowed speed into shared data
-
-Where: `pipeline.py:299`, read back at `pipeline.py:329` and `pipeline.py:370`. From reading.
-
-When an attribute borrows a speed, the code stores it as if it were the attribute's own. A later attribute can then borrow the borrowed speed. I tried to build a case where the keys change because of it and could not. With three axes per channel, the borrowed speed is the one the direct rule would pick anyway. So it is fragile but not wrong today.
-
-Fix: keep the borrowed speed in a separate field. Not needed if AB-10 removes Scalar.
+Decision for you, from use: if Vector feels right on real shots, delete Scalar and the Signal toggle.
 
 ### AB-12 Low. Fields and code that nothing reads
 
-- `AdjustmentContext.layers_to_process` and `.adjustment_keys`, `pipeline.py:43` and `:45`.
-- `AttributeData.velocity_source`, `pipeline.py:59`, set at `:205` and `:300`.
+- `AdjustmentContext.layers_to_process`, `pipeline.py:47`.
 - `calculate_adjustment_values`, `pipeline.py:225`. A wrapper around one call.
 - The `skipped` dict, `pipeline.py:162-216`. It feeds one debug log line.
 - `scale_speed`, `vector_core.py:117`. A one-line alias of `translation_speed`.
@@ -143,20 +88,23 @@ Fix: keep the borrowed speed in a separate field. Not needed if AB-10 removes Sc
 
 | Item | Outcome |
 |---|---|
+| Key times from every control and attribute were merged, was AB-02 | Fixed. Every curve is blended between its own keys. 4 scene checks. Two controls with the same name under different groups now work too; before, the run refused them |
+| A third of a run went to listing animated attributes, was AB-07 | Fixed. `maya_scene.layer_curves` walks the layer once. 100 controls by 120 frames: 0.10 s in Scalar and 0.14 s in Vector, from 0.25 s |
+| A key on a fractional frame left a stray key, was AB-08 | Fixed. Only whole frames between a curve's first and last key are written, and a key between frames keeps its value. 1 scene check |
+| Smart fallback wrote borrowed speed into shared data, was AB-11 | Fixed. A fallback always reads the sibling's own motion from the `LayerStack`, so the processing order cannot matter |
 | Float noise on a still channel defeated the blend, was AB-03 | Fixed. `core.is_still` treats steps up to `STILL_TOLERANCE`, 1e-6 per frame, as no motion. 3 scene checks on baked keys with noise and 3 pytest checks |
 | A key between the first and last gave a pop or overwrote a key, was AB-01 | Fixed in `core.segment_weights`. A span no longer counts the motion that arrived at its first key, and a span with no motion below spreads its change evenly. 4 scene checks and 5 pytest checks |
 | Two copies of the distribution loop, was AB-09 | Fixed. `distribute_by_speed` calls `core.distribute_adjustment` |
 | `LayerStack` did not compute the layers below | Fixed. Rewritten, 21 checks in `adjustment_blend/tests/test_layers.py` |
 | Cost grew with the square of the number of controls | Fixed. One shared `LayerStack` per run |
 | `run()` from a script gave one undo step per key | Fixed. `adjustmentBlendKeys` makes a run one step, 20 checks in `adjustment_blend/tests/test_keys.py` |
-| No scene tests | Fixed. 68 checks, `mayapy adjustment_blend/tests/run.py`. The review said there were no tests at all. That was wrong: `tests/` already had 39 pytest checks for the pure core, now 46 |
+| No scene tests | Fixed. 74 checks, `mayapy adjustment_blend/tests/run.py`. The review said there were no tests at all. That was wrong: `tests/` already had 39 pytest checks for the pure core, now 46 |
 | Dead code in the old `maya_layers.py` | Gone with the rewrite |
 | Move the undo chunk into `run()` | Not needed after the plug-in |
 | Replace `maya_layers.py` with a `getAttr(time=)` sampler | Withdrawn. The spike measured it about 250 times slower per sample |
 
 ## Order I'd do them in
 
-1. AB-07 with AB-02 and AB-08. One change: walk the layer's curves, spans per curve.
-2. AB-05, then AB-04. Both need you to say what layer selection should mean.
-3. AB-06, AB-12, AB-13.
-4. AB-10 once you have an opinion on Vector.
+1. AB-05, then AB-04. Both need you to say what layer selection should mean.
+2. AB-06, AB-12, AB-13.
+3. AB-10 once you have an opinion on Vector.

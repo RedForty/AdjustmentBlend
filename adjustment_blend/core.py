@@ -207,15 +207,19 @@ def distribute_adjustment(
     endpoints always land exactly on the artist's keyed values. A segment with
     no motion below it spreads its change evenly (see :func:`segment_weights`).
 
-    The returned list contains one value per whole frame from the first key to
-    the last, with the shared frame between adjacent segments emitted once.
-    """
-    new_values: List[float] = []
-    emitted_frames = set()
+    ``key_ranges`` must be in order and joined end to end, as the gaps between
+    one curve's keys are.
 
-    for start_frame, end_frame in key_ranges:
-        start_idx = list(calculation_range).index(start_frame)
-        end_idx = list(calculation_range).index(end_frame) + 1
+    The returned list contains one value per sample of ``calculation_range``
+    from the first key to the last, with the sample shared by two segments
+    emitted once.
+    """
+    position = {frame: index for index, frame in enumerate(calculation_range)}
+    new_values: List[float] = []
+
+    for segment, (start_frame, end_frame) in enumerate(key_ranges):
+        start_idx = position[start_frame]
+        end_idx = position[end_frame] + 1
 
         weights = segment_weights(composite_velocity[start_idx:end_idx])
 
@@ -223,15 +227,14 @@ def distribute_adjustment(
         adj_end = adjustment_values[end_idx - 1]
 
         # Accumulate the shares (0 -> 100%) across the segment and map that
-        # running percentage onto the segment's value change.
+        # running percentage onto the segment's value change. The first sample
+        # of a later segment is the key it shares with the segment before.
         sum_percentage = 0.0
-        for i, frame in enumerate(range(int(start_frame), int(end_frame) + 1)):
+        last = len(weights) - 1
+        for i in range(0 if segment == 0 else 1, last):
             sum_percentage += weights[i]
-            new_value = map_from_to(sum_percentage, 0.0, 100.0, adj_start, adj_end)
-
-            # The boundary frame is shared by two segments; emit it only once.
-            if frame not in emitted_frames:
-                new_values.append(new_value)
-                emitted_frames.add(frame)
+            new_values.append(map_from_to(sum_percentage, 0.0, 100.0, adj_start, adj_end))
+        # The shares add up to 100 only to rounding. The end key is exact.
+        new_values.append(adj_end)
 
     return new_values

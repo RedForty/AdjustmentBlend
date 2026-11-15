@@ -135,7 +135,7 @@ def _expect_same(what, want, got, skip=()):
 
 
 def _write(curves):
-    maya_keys.write_keys([(curve, VALUES) for curve in curves], FRAMES)
+    maya_keys.write_keys([(curve, FRAMES, VALUES) for curve in curves])
 
 
 # =============================================================================
@@ -255,7 +255,8 @@ def _failure_changes_nothing():
     cmds.select(clear=True)  # the newest entry on the undo queue
     queue = cmds.undoInfo(query=True, undoName=True)
     try:
-        maya_keys.write_keys([(curves[0], VALUES), ("no_such_curve", VALUES), (curves[1], VALUES)], FRAMES)
+        maya_keys.write_keys([(curves[0], FRAMES, VALUES), ("no_such_curve", FRAMES, VALUES),
+                              (curves[1], FRAMES, VALUES)])
     except Exception as e:  # noqa: BLE001 - any error will do, as long as there is one
         error = type(e).__name__
     else:
@@ -265,7 +266,7 @@ def _failure_changes_nothing():
     if cmds.undoInfo(query=True, undoName=True) != queue:
         raise Failure("the failed write is on the undo queue")
     try:
-        maya_keys.write_keys([(curves[0], VALUES[:5])], FRAMES)
+        maya_keys.write_keys([(curves[0], FRAMES, VALUES[:5])])
     except ValueError:
         pass
     else:

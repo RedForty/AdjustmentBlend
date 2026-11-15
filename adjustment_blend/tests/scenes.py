@@ -101,6 +101,26 @@ def adjustment(controls, offsets, name="Adjust"):
     return scene
 
 
+def adjustment_by_plug(keys_by_plug, name="Adjust"):
+    """An adjustment layer where every curve has its own keys.
+
+    keys_by_plug maps "control.attr" to {time: value}. Returns one Scene per control, in the
+    order the controls first appear, all on the same layer.
+    """
+    name = layer(name, list(keys_by_plug))
+    by_control = {}
+    for plug, by_time in keys_by_plug.items():
+        control, attr = plug.rsplit(".", 1)
+        for time, value in sorted(by_time.items()):
+            layer_key(name, control, attr, time, value)
+        by_control.setdefault(control, {})[attr] = dict(by_time)
+    made = [Scene(controls=[control], layer=name, keys=keys) for control, keys in by_control.items()]
+    cmds.select(list(by_control))
+    for each in cmds.ls(type="animLayer"):
+        cmds.animLayer(each, edit=True, selected=each == name, preferred=each == name)
+    return made
+
+
 def select(scene):
     """Select the controls and the adjustment layer, as the artist would before blending."""
     cmds.select(scene.controls)

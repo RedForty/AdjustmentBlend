@@ -35,6 +35,11 @@ def run(report):
     check("baked keys with rounding noise, vector", lambda: _baked("vector"))
     check("scale offset on a scaling control", _scale)
     check("two controls that hold at different times", _two_controls)
+    for signal in ("scalar", "vector"):
+        check("two controls keyed on different frames, %s" % signal, lambda: _own_keys_two_controls(signal))
+        check("two attributes keyed on different frames, %s" % signal, lambda: _own_keys_one_control(signal))
+    check("a first key between two frames", _key_between_frames)
+    check("two controls with the same name", _same_name)
     check("another layer below adds motion", lambda: _other_layer("below"))
     check("a muted layer below is ignored", lambda: _other_layer("below", mute=True))
     check("a half-weight layer below counts half", lambda: _other_layer("below", weight=0.5))
@@ -184,6 +189,80 @@ def _two_controls():
             common.expect_follows(scene, control, attr)
             common.expect_holds(control, attr, holds=holds)
     return "each control follows its own motion"
+
+
+# =============================================================================
+# Every curve is blended between its own keys
+# =============================================================================
+
+def _blend_all(made, **options):
+    root = cmds.animLayer(query=True, root=True)
+    controls = [scene.control for scene in made]
+    if not adjustment_blend.run(made[0].layer, [root], controls, **options):
+        raise Failure("run() returned False")
+
+
+def _own_keys_two_controls(signal):
+    """One control is keyed to frame 40 and the other to frame 30, where the first one is holding."""
+    first = scenes.performer("first")
+    second = scenes.performer("second")
+    made = scenes.adjustment_by_plug({first + ".translateX": {0: 0.0, 40: 6.0},
+                                      second + ".translateX": {0: 0.0, 30: 6.0}})
+    _blend_all(made, signal=signal)
+    for scene in made:
+        # expect_follows also checks the keys stop at the curve's own last key.
+        common.expect_follows(scene, scene.control, "translateX", tolerance=VECTOR_TOLERANCE)
+        common.expect_holds(scene.control, "translateX", tolerance=VECTOR_TOLERANCE)
+    return "each follows the motion between its own keys, and both hold"
+
+
+def _own_keys_one_control(signal):
+    control = scenes.performer()
+    made = scenes.adjustment_by_plug({control + ".translateX": {0: 0.0, 40: 6.0},
+                                      control + ".rotateY": {0: 0.0, 25: 10.0, 40: 20.0}})
+    _blend_all(made, signal=signal)
+    for attr in ("translateX", "rotateY"):
+        common.expect_follows(made[0], control, attr, tolerance=VECTOR_TOLERANCE)
+        common.expect_keys_kept(made[0], control, attr)
+    common.expect_holds(control, "translateX", tolerance=VECTOR_TOLERANCE)
+    return "the third key on rotateY does not cut translateX in two"
+
+
+def _key_between_frames():
+    """The artist's first key is at frame 0.5. It stays, and no key is set before it."""
+    control = scenes.performer()
+    scene = scenes.adjustment_by_plug({control + ".translateX": {0.5: 0.0, 40: 6.0}})[0]
+    _blend_all([scene])
+    times = common.key_times(scene, control, "translateX")
+    if times != [0.5] + [float(f) for f in range(1, 41)]:
+        raise Failure("keys at %s ... %s, not at 0.5 and then on each frame from 1 to 40" % (times[:3], times[-1]))
+    samples = [0.5] + list(range(1, 41))
+    below = common.below_values(scene, control, "translateX", frames=samples)
+    got = common.layer_values(scene, control, "translateX", samples)
+    travelled, total = 0.0, sum(abs(b - a) for a, b in zip(below, below[1:]))
+    for i in range(len(samples)):
+        if i:
+            travelled += abs(below[i] - below[i - 1])
+        want = 6.0 * travelled / total
+        if abs(got[i] - want) > 1e-6:
+            raise Failure("translateX is %.4f at frame %s and must be %.4f" % (got[i], samples[i], want))
+    return "keyed at 0.5 and on frames 1 to 40, following the motion from the key on"
+
+
+def _same_name():
+    """Two controls called "hand" under different groups, as the left and right side of a rig can be."""
+    controls = []
+    for side, beats in (("left", scenes.BEATS), ("right", (0, 5, 25, 35, 40))):
+        control = scenes.performer("hand", beats=beats)
+        group = cmds.group(empty=True, name=side)
+        cmds.parent(control, group)
+        controls.append("%s|hand" % side)
+    made = scenes.adjustment_by_plug({control + ".translateX": {0: 0.0, 40: 6.0} for control in controls})
+    _blend_all(made)
+    for scene, holds in zip(made, (scenes.HOLDS, ((5, 25), (35, 40)))):
+        common.expect_follows(scene, scene.control, "translateX")
+        common.expect_holds(scene.control, "translateX", holds=holds)
+    return "%s and %s each follow their own motion" % tuple(controls)
 
 
 def _other_layer(position, **settings):
