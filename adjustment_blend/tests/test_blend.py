@@ -41,10 +41,9 @@ def run(report):
     check("one key on the layer is not enough", _one_key)
     check("a control that is not on the layer is refused", _not_a_member)
     check("apply=False writes nothing", _dry_run)
-    check("a third key in the middle of a move", _third_key_mid_move,
-          known_bug="each span after the first starts with motion that belongs to the span before it")
-    check("the first two keys span a hold", _keys_span_a_hold,
-          known_bug="a span with no motion below gets no change, so the key that ends it is overwritten")
+    for signal in ("scalar", "vector"):
+        check("a third key in the middle of a move, %s" % signal, lambda: _third_key_mid_move(signal))
+        check("two keys span a hold, %s" % signal, lambda: _keys_span_a_hold(signal))
 
 
 # =============================================================================
@@ -214,20 +213,33 @@ def _dry_run():
 # More than two keys
 # =============================================================================
 
-def _third_key_mid_move():
+def _third_key_mid_move(signal):
     control = scenes.performer()
     scene = scenes.adjustment([control], {"translateX": {0: 0.0, 25: 4.0, 40: 6.0}})
-    if not common.blend(scene):
+    if not common.blend(scene, signal=signal):
         raise Failure("run() returned False")
     common.expect_keys_kept(scene, control, "translateX")
-    common.expect_follows(scene, control, "translateX")
+    common.expect_follows(scene, control, "translateX", tolerance=VECTOR_TOLERANCE)
     return "both spans follow the motion below"
 
 
-def _keys_span_a_hold():
+def _keys_span_a_hold(signal):
+    """The control holds still from frame 10 to 20, and the artist keys a change across that hold.
+
+    There is no motion to follow there, so the change is spread evenly. The span after it follows
+    the motion as usual.
+    """
     control = scenes.performer()
-    scene = scenes.adjustment([control], {"translateX": {10: 0.0, 20: 5.0, 40: 6.0}})
-    if not common.blend(scene):
+    keys = {10: 0.0, 20: 5.0, 40: 6.0}
+    scene = scenes.adjustment([control], {"translateX": keys})
+    if not common.blend(scene, signal=signal):
         raise Failure("run() returned False")
     common.expect_keys_kept(scene, control, "translateX")
-    return "the three keys keep their values"
+    frames = list(range(10, 41))
+    got = common.layer_values(scene, control, "translateX", frames)
+    below = common.below_values(scene, control, "translateX")
+    want = [0.5 * (f - 10) for f in range(10, 20)] + common.expected({20: 5.0, 40: 6.0}, below)
+    worst = max(range(len(frames)), key=lambda i: abs(got[i] - want[i]))
+    if abs(got[worst] - want[worst]) > VECTOR_TOLERANCE:
+        raise Failure("translateX is %.4f at frame %d and must be %.4f" % (got[worst], frames[worst], want[worst]))
+    return "the keys keep their values; even steps through the hold, then it follows the motion"

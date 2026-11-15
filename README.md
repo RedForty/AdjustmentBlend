@@ -118,8 +118,7 @@ single speed — translation speed for `translate`, geodesic **angular speed** f
 for `scale`. Because all three axes share one signal, a flat axis automatically
 rides whatever its siblings are doing below, so the sibling-axis fallback is no
 longer needed. In this mode `smart` governs only the last-resort *cross-channel*
-borrow (e.g. a fully static rotation group riding translation). Flat segments
-distribute linearly rather than collapsing.
+borrow (e.g. a fully static rotation group riding translation).
 
 The algorithm lives in `adjustment_blend/vector_core.py` (pure, unit tested).
 It's opt-in while it gets real-scene mileage; the scalar path is unchanged.
@@ -173,9 +172,8 @@ scenes.move_hold_move_hold()
 
 ## Known limitations
 
-- Segments are evaluated independently; an adjustment spanning a region where
-  the base animation is flat in one segment but not another can produce uneven
-  results (smart mode mitigates this).
+- Segments are evaluated independently. A segment with no motion below it has
+  nothing to follow, so its change is spread evenly across the segment.
 - `layers_below` is accepted but has no effect. The motion below is read from
   the layer's blend nodes, as Maya composites it.
 - See [REVIEW.md](REVIEW.md) for the open items.

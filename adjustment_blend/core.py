@@ -141,6 +141,31 @@ def get_other_channel(channel: str) -> List[str]:
 # The algorithm: velocity-matched distribution
 # =============================================================================
 
+def segment_weights(speed: Sequence[float]) -> List[float]:
+    """Return the share of a segment's change that lands on each frame.
+
+    ``speed`` holds one sample per frame of the segment, from its first key to
+    its last. The shares add up to 100.
+
+    The first sample is the motion that *arrived* at the segment's first key.
+    It belongs to the segment before, so it gets no share: the first frame
+    keeps the first key's value. Counting it made every segment after the
+    first start with a jump.
+
+    A segment with no motion to follow spreads its change evenly. With no
+    share to hand out it would hold the first key's value to the end and
+    overwrite the key that ends it.
+    """
+    rest = speed[1:]
+    if not rest:
+        return [0.0] * len(speed)
+    total = sum(rest)
+    if total > 0.0:
+        scale = 100.0 / total
+        return [0.0] + [sample * scale for sample in rest]
+    return [0.0] + [100.0 / len(rest)] * len(rest)
+
+
 def distribute_adjustment(
     composite_velocity: Sequence[float],
     adjustment_values: Sequence[float],
@@ -163,7 +188,8 @@ def distribute_adjustment(
     we walk each segment and hand out the segment's total value change in
     proportion to where motion actually happens. Frames where the lower layers
     move fast absorb a large share of the change; held frames barely move. The
-    endpoints always land exactly on the artist's keyed values.
+    endpoints always land exactly on the artist's keyed values. A segment with
+    no motion below it spreads its change evenly (see :func:`segment_weights`).
 
     The returned list contains one value per whole frame from the first key to
     the last, with the shared frame between adjacent segments emitted once.
@@ -175,17 +201,16 @@ def distribute_adjustment(
         start_idx = list(calculation_range).index(start_frame)
         end_idx = list(calculation_range).index(end_frame) + 1
 
-        velocity_slice = composite_velocity[start_idx:end_idx]
-        normalized_velocity = normalize_values(velocity_slice)
+        weights = segment_weights(composite_velocity[start_idx:end_idx])
 
         adj_start = adjustment_values[start_idx]
         adj_end = adjustment_values[end_idx - 1]
 
-        # Accumulate normalized motion (0 -> 100%) across the segment and map
-        # that running percentage onto the segment's value change.
+        # Accumulate the shares (0 -> 100%) across the segment and map that
+        # running percentage onto the segment's value change.
         sum_percentage = 0.0
         for i, frame in enumerate(range(int(start_frame), int(end_frame) + 1)):
-            sum_percentage += normalized_velocity[i]
+            sum_percentage += weights[i]
             new_value = map_from_to(sum_percentage, 0.0, 100.0, adj_start, adj_end)
 
             # The boundary frame is shared by two segments; emit it only once.
