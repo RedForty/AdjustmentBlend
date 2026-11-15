@@ -123,21 +123,29 @@ def _save_choice(opt_key, ctrl, *_args):
 
 
 def _on_run(signal_ctrl, mode_ctrl, *_args):
-    """Read the toggles and run, as a single undoable operation."""
+    """Read the toggles and run."""
     signal = "vector" if cmds.radioButtonGrp(signal_ctrl, q=True, select=True) == 2 else "scalar"
     smart = cmds.radioButtonGrp(mode_ctrl, q=True, select=True) == 2
+    return _run_and_report(signal, smart)[0]
 
+
+def _run_and_report(signal, smart):
+    """Run as a single undoable operation and say how it went.
+
+    Returns ``(result, message)``. ``result`` is ``None`` when the run raised
+    an error: that is not the same as having nothing to blend, and the artist
+    is told so.
+    """
     cmds.undoInfo(openChunk=True, chunkName="Adjustment Blend")
     try:
         result = run(signal=signal, smart=smart)
     except Exception:  # noqa: BLE001 - keep the UI alive, report in the log
         log.exception("Adjustment Blend failed")
-        result = False
+        result = None
     finally:
         cmds.undoInfo(closeChunk=True)
 
-    _report(signal, smart, result)
-    return result
+    return result, _report(signal, smart, result)
 
 
 def _report(signal, smart, result):
@@ -145,12 +153,18 @@ def _report(signal, smart, result):
     mode = "Smart" if smart else "Normal"
     if result:
         msg = f"Adjustment Blend applied  ({signal.title()} / {mode})"
+    elif result is None:
+        msg = f"Adjustment Blend FAILED, see the Script Editor  ({signal.title()} / {mode})"
     else:
         msg = f"Adjustment Blend: nothing to process  ({signal.title()} / {mode})"
 
-    log.info(msg)
+    if result is None:
+        cmds.warning(msg)
+    else:
+        log.info(msg)
     try:
         cmds.inViewMessage(statusMessage=msg, position="midCenter",
                            fade=True, fadeStayTime=2000)
     except Exception:  # noqa: BLE001 - inViewMessage is cosmetic
         pass
+    return msg

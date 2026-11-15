@@ -223,12 +223,12 @@ def calculate_adjustment_values(attr_data: AttributeData) -> List[float]:
 def apply_keyframes(
     results: List[Tuple[AttributeData, List[float]]],
     context: AdjustmentContext,
-) -> bool:
+) -> None:
     """Write the densified values back onto the adjustment curves.
 
     Each curve is keyed on the whole frames between its own first and last
     key. Every curve is written in one undo step (see :mod:`maya_keys`). If any
-    of them cannot be written, none is.
+    of them cannot be written, none is, and the error is raised.
     """
     # A key between two frames puts its time in the samples. It keeps its own
     # value, and no new key is set there.
@@ -244,12 +244,7 @@ def apply_keyframes(
         if frames:
             writes.append((attr_data.adjustment_curve, frames, new_values))
 
-    try:
-        maya_keys.write_keys(writes)
-        return True
-    except Exception as e:  # noqa: BLE001
-        log.error("Failed to apply keyframes, nothing was changed: %s", e)
-        return False
+    maya_keys.write_keys(writes)
 
 
 # =============================================================================
@@ -424,7 +419,11 @@ def run(
         apply: If ``True``, write keyframes. If ``False``, compute only (dry run).
 
     Returns:
-        ``True`` if any attribute was processed, ``False`` otherwise.
+        ``True`` if any attribute was processed, ``False`` if there was nothing
+        to blend (a ``cmds.warning`` says why).
+
+    Raises:
+        Exception: The keys could not be written. Nothing is changed then.
     """
     # Stage 0: which layer (an explicit argument wins; else discover).
     if adjustment_layer is None:
@@ -454,8 +453,8 @@ def _finish(results, context, apply, label):
         )
         return bool(processed)
 
-    if results and not apply_keyframes(results, context):
-        return False
+    if results:
+        apply_keyframes(results, context)
     log.info("Adjusted attributes (%s): %s", label, processed)
     return bool(processed)
 

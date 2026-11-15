@@ -27,6 +27,7 @@ GROUPS = [  # group name, module
     ("blend", "adjustment_blend.tests.test_blend"),
     ("layers", "adjustment_blend.tests.test_layers"),
     ("keys", "adjustment_blend.tests.test_keys"),
+    ("ui", "adjustment_blend.tests.test_ui"),
 ]
 
 
