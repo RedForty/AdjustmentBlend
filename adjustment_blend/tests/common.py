@@ -53,8 +53,7 @@ def check(report, name, function, known_bug=None):
 
 def blend(scene, **options):
     """Run Adjustment Blend on a scene the way a script would, with no UI."""
-    root = cmds.animLayer(query=True, root=True)
-    return adjustment_blend.run(scene.layer, [root], scene.controls, **options)
+    return adjustment_blend.run(scene.layer, scene.controls, **options)
 
 
 def key_times(scene, control, attr):

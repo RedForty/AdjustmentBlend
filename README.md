@@ -43,8 +43,9 @@ import adjustment_blend
 adjustment_blend.run(smart=True)
 ```
 
-With no arguments, `run()` reads the adjustment layer and the stack beneath it
-from the Anim Layer editor and operates on your current selection.
+With no arguments, `run()` takes the selected animation layer as the adjustment
+layer and operates on your current selection. With several layers selected it
+takes the topmost of them; with none selected, the top of the stack.
 
 ### UI
 
@@ -63,14 +64,13 @@ persist across scenes and sessions.
 
 ### Explicit / headless (pipeline, batch, tests)
 
-Pass the layer context yourself to skip all UI queries:
+Name the layer and the objects yourself:
 
 ```python
 import adjustment_blend
 
 adjustment_blend.run(
     adjustment_layer="AnimLayer1",
-    layers_below=["BaseAnimation"],
     objects=["pCube1"],
     smart=True,
 )
@@ -80,8 +80,7 @@ adjustment_blend.run(
 
 | Argument           | Default      | Meaning                                                                 |
 | ------------------ | ------------ | ----------------------------------------------------------------------- |
-| `adjustment_layer` | *discovered* | Target layer to densify. Read from the UI when omitted.                 |
-| `layers_below`     | *discovered* | Ordered layers to composite motion from. Read from the UI when omitted. |
+| `adjustment_layer` | *discovered* | Target layer to densify. The selected layer when omitted.               |
 | `objects`          | *selection*  | Objects to process. Falls back to selection, then to layer members.     |
 | `signal`           | `"scalar"`   | Motion signal. `"scalar"` = per-attribute velocity. `"vector"` (experimental) = one shared speed per channel group. |
 | `smart`            | `False`      | Enable fallbacks when an attribute has no motion of its own (see below). |
@@ -131,7 +130,7 @@ adjustment_blend/
 ├── vector_core.py   # the vector signal — no Maya, unit tested
 ├── maya_layers.py   # LayerStack: reads the motion below a layer by curve math
 ├── maya_keys.py     # writes the keys in bulk, as one undo step
-├── maya_scene.py    # scene I/O + layer discovery (the only UI dependency)
+├── maya_scene.py    # scene I/O + layer discovery
 ├── pipeline.py      # orchestration + the public run() entry point
 ├── ui.py            # the dockable panel
 ├── plug-ins/
@@ -174,8 +173,8 @@ scenes.move_hold_move_hold()
 
 - Segments are evaluated independently. A segment with no motion below it has
   nothing to follow, so its change is spread evenly across the segment.
-- `layers_below` is accepted but has no effect. The motion below is read from
-  the layer's blend nodes, as Maya composites it.
+- `run()` no longer takes `layers_below` (removed in 0.2.0). The motion to
+  follow is whatever Maya composites below the adjustment layer.
 - See [REVIEW.md](REVIEW.md) for the open items.
 
 ## License

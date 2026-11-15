@@ -16,35 +16,11 @@ Size is my guess at the work: small is under an hour, medium is an afternoon.
 
 | ID | Severity | Item | Size |
 |---|---|---|---|
-| AB-04 | Medium | With two layers selected, name order picks the adjustment layer | small |
-| AB-05 | Medium | `layers_below` does nothing | small |
 | AB-06 | Medium | A failed run reads as "nothing to process" | small |
 | AB-10 | Low | Two signals, Scalar and Vector, do the same job | decision |
 | AB-12 | Low | Fields and code that nothing reads | small |
 | AB-13 | Low | Four small things | small |
 | AB-15 | Low | `scripts/adjustmentBlend.py` is a legacy copy of the tool | small |
-
-### AB-04 Medium. With two layers selected, name order picks the adjustment layer
-
-Where: `maya_scene.py:38-44`, `maya_scene.py:75-78`.
-
-`get_selected_animlayers` returns layers in `cmds.ls` order and the code takes the last one. Measured: the stack is BaseAnimation, Zeta, Alpha, Mid from the bottom. With Alpha and Zeta selected it returns `['Alpha', 'Zeta']`, so Zeta gets the keys. Zeta is the lower of the two.
-
-Fix: decide the rule first. The topmost selected layer is my suggestion. Then read the order from the stack. Depends on what you decide in AB-05.
-
-### AB-05 Medium. `layers_below` does nothing
-
-Where: `pipeline.py:93-95`, `pipeline.py:120`, `maya_scene.py:47-93`, `maya_scene.py:123-141`.
-
-Measured: three different `layers_below` lists gave identical keys. The reader takes what Maya shows below the layer straight from the blend nodes and never looks at the list.
-
-What the argument still does:
-
-- The run aborts when the list is empty.
-- `run()` with no arguments needs the Anim Layer editor widget `AnimLayerTabanimLayerEditor` to exist, only to build this list. From reading: without the widget `cmds.treeView` raises.
-- Locked layers are dropped from the list, which changes nothing.
-
-Decision for you: remove it or give it a meaning. I'd remove it. That deletes `filter_layers_by_objects`, the tree view query and most of `discover_layers`, and the tool stops depending on the editor being open.
 
 ### AB-06 Medium. A failed run reads as "nothing to process"
 
@@ -88,6 +64,8 @@ Decision for you, from use: if Vector feels right on real shots, delete Scalar a
 
 | Item | Outcome |
 |---|---|
+| `layers_below` did nothing, was AB-05 | Removed in 0.2.0. `run(adjustment_layer, objects)`. The tool no longer needs the Anim Layer editor: the stack order comes from `animLayer -children`, which I checked against the order Maya composites in, with moved and nested layers |
+| With two layers selected, name order picked the adjustment layer, was AB-04 | Fixed. `maya_scene.discover_adjustment_layer` takes the topmost selected layer in the stack. 3 scene checks |
 | Key times from every control and attribute were merged, was AB-02 | Fixed. Every curve is blended between its own keys. 4 scene checks. Two controls with the same name under different groups now work too; before, the run refused them |
 | A third of a run went to listing animated attributes, was AB-07 | Fixed. `maya_scene.layer_curves` walks the layer once. 100 controls by 120 frames: 0.10 s in Scalar and 0.14 s in Vector, from 0.25 s |
 | A key on a fractional frame left a stray key, was AB-08 | Fixed. Only whole frames between a curve's first and last key are written, and a key between frames keeps its value. 1 scene check |

@@ -12,9 +12,8 @@ Every curve is blended between its own keys. Two controls keyed on different
 frames, or two attributes of one control, do not cut each other into segments.
 
 :func:`run` is the public entry point. Call it with no arguments to operate on
-the current selection and the Anim Layer editor's state, or pass
-``adjustment_layer`` / ``layers_below`` / ``objects`` to drive it explicitly
-without touching the UI.
+the current selection and the selected animation layer, or pass
+``adjustment_layer`` / ``objects`` to drive it explicitly.
 """
 
 from __future__ import annotations
@@ -44,7 +43,6 @@ log = logging.getLogger(__name__)
 class AdjustmentContext:
     """The "what to process" gathered up front for one adjustment-blend run."""
     adjustment_layer: str
-    layers_to_process: List[str]
     objects: List[str]
     curves: List[LayerCurve]           # the adjustment layer's curves for the objects
     calculation_range: List[float]     # every frame sampled: first key of any curve to the last
@@ -84,14 +82,12 @@ class AttributeData:
 
 def build_context(
     adjustment_layer: str,
-    layers_below: List[str],
     objects: Optional[List[str]] = None,
 ) -> Optional[AdjustmentContext]:
     """Validate scene state and find the adjustment curves to work on.
 
     Args:
         adjustment_layer: The layer whose sparse keys are being densified.
-        layers_below: The ordered layers to composite motion from.
         objects: Objects to process. ``None`` falls back to the current
             selection, then to the adjustment layer's members.
 
@@ -99,10 +95,6 @@ def build_context(
         A populated :class:`AdjustmentContext`, or ``None`` if validation fails
         (a ``cmds.warning`` explains why in every failure case).
     """
-    if not layers_below:
-        cmds.warning("No animation layers below adjustment layer to process. Aborting!")
-        return None
-
     adjustment_layer_members = cmds.animLayer(adjustment_layer, q=True, attribute=True) or []
     if not adjustment_layer_members:
         cmds.warning(f"Adjustment layer {adjustment_layer} has no members. Aborting!")
@@ -125,9 +117,6 @@ def build_context(
         cmds.warning(f"{adjustment_layer} contains no controls. Aborting!")
         return None
 
-    # Drop layers that don't touch any of our objects.
-    layers_below = maya_scene.filter_layers_by_objects(layers_below, objects)
-
     curves = maya_scene.layer_curves(adjustment_layer, objects)
     adjustment_keys = sorted({key for curve in curves for key in curve.keys})
     if not adjustment_keys:
@@ -140,13 +129,11 @@ def build_context(
     calculation_range = core.get_float_range(adjustment_keys)
 
     log.debug("Adjustment layer: %s", adjustment_layer)
-    log.debug("Layers below: %s", layers_below)
     log.debug("Objects: %s", objects)
     log.debug("Frames: %s to %s", calculation_range[0], calculation_range[-1])
 
     return AdjustmentContext(
         adjustment_layer=adjustment_layer,
-        layers_to_process=layers_below,
         objects=objects,
         curves=curves,
         calculation_range=calculation_range,
@@ -390,7 +377,6 @@ def _find_channel_fallback(
 
 def run(
     adjustment_layer: Optional[str] = None,
-    layers_below: Optional[List[str]] = None,
     objects: Optional[List[str]] = None,
     *,
     signal: str = "scalar",
@@ -399,27 +385,28 @@ def run(
 ) -> bool:
     """Run an adjustment blend.
 
-    Called with no arguments, it discovers the adjustment layer and the stack
-    below it from the Anim Layer editor and operates on the current selection —
-    the everyday interactive workflow::
+    Called with no arguments, it takes the selected animation layer as the
+    adjustment layer and operates on the current selection — the everyday
+    interactive workflow::
 
         import adjustment_blend
         adjustment_blend.run(smart=True)
 
-    Supply the layer context explicitly to run without the UI (headless,
-    pipeline, tests)::
+    Name the layer and the objects to run from a script (headless, pipeline,
+    tests)::
 
         adjustment_blend.run(
             adjustment_layer="AnimLayer1",
-            layers_below=["BaseAnimation"],
             objects=["pCube1"],
         )
 
+    The motion to follow is whatever Maya composites below the adjustment
+    layer: every layer under it in the stack, with its weight, mute, solo and
+    override settings.
+
     Args:
-        adjustment_layer: Target layer to densify. Discovered from the UI if
-            ``None``.
-        layers_below: Ordered layers to composite motion from. Discovered from
-            the UI if ``None``.
+        adjustment_layer: Target layer to densify. When ``None``: the topmost
+            selected layer, or the top of the stack if none is selected.
         objects: Objects to process. Defaults to the selection, then to the
             adjustment layer's members.
         signal: Which motion signal drives the distribution.
@@ -439,20 +426,15 @@ def run(
     Returns:
         ``True`` if any attribute was processed, ``False`` otherwise.
     """
-    # Stage 0: resolve the layer context (explicit args win; else discover).
-    if adjustment_layer is None or layers_below is None:
-        discovered = maya_scene.discover_layers()
-        if not discovered:
+    # Stage 0: which layer (an explicit argument wins; else discover).
+    if adjustment_layer is None:
+        adjustment_layer = maya_scene.discover_adjustment_layer()
+        if not adjustment_layer:
             cmds.warning("No animation layers to process. Aborting!")
             return False
-        discovered_layer, discovered_below = discovered
-        if adjustment_layer is None:
-            adjustment_layer = discovered_layer
-        if layers_below is None:
-            layers_below = discovered_below
 
     # Stage 1: context
-    context = build_context(adjustment_layer, layers_below, objects)
+    context = build_context(adjustment_layer, objects)
     if not context:
         return False
 

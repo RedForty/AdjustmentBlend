@@ -2,29 +2,19 @@
 Scene I/O and layer discovery for Adjustment Blend.
 
 Everything that reads state out of the running Maya session lives here:
-discovering which layer is the adjustment target and which layers sit below it,
-and finding the adjustment layer's curves and their keys.
+which layer is the adjustment target, and the adjustment layer's curves and
+their keys.
 
-Note on the UI dependency
--------------------------
-:func:`discover_layers` reads the *visible* stack order straight from the Anim
-Layer editor (``AnimLayerTabanimLayerEditor``). That is deliberate: Maya does
-not expose a reliable, ordered view of the layer stack through the command API
-(``animLayer -children`` mishandles nesting, ``ls -type animLayer`` returns
-creation order), whereas the editor shows the exact order the animator is
-working against. The tool only ever operates on anim layers, so in practice the
-editor is always open.
-
-Callers that need to run without the UI (headless, pipeline, tests) should not
-remove this query — they should bypass it by passing ``adjustment_layer`` and
-``layers_below`` straight to :func:`adjustment_blend.run`.
+None of it needs the Anim Layer editor to be open. The stack order comes from
+``animLayer -children`` walked from the root layer, which is the order Maya
+composites the layers in, nested layers included.
 """
 
 from __future__ import annotations
 
 import logging
 from collections import defaultdict
-from typing import List, NamedTuple, Optional, Sequence, Tuple
+from typing import List, NamedTuple, Optional, Sequence
 
 from maya import cmds
 
@@ -32,87 +22,35 @@ from . import core
 
 log = logging.getLogger(__name__)
 
-# Name of the Anim Layer editor treeView widget that holds the visible stack.
-ANIM_LAYER_TREEVIEW = "AnimLayerTabanimLayerEditor"
 
+def stack_order(parent: Optional[str] = None) -> List[str]:
+    """Return every layer above the root, from the bottom of the stack to the top.
 
-def get_selected_animlayers() -> List[str]:
-    """Return the names of the anim layers currently selected in the editor."""
+    A layer's children come right after it.
+    """
+    parent = parent or cmds.animLayer(query=True, root=True)
+    if not parent:
+        return []
     layers = []
-    for each in cmds.ls(type="animLayer"):
-        if cmds.animLayer(each, query=True, selected=True):
-            layers.append(each)
+    for child in cmds.animLayer(parent, query=True, children=True) or []:
+        layers.append(child)
+        layers.extend(stack_order(child))
     return layers
 
 
-def discover_layers() -> Optional[Tuple[str, List[str]]]:
-    """Resolve the adjustment layer and the (unlocked) layers below it.
+def discover_adjustment_layer() -> Optional[str]:
+    """Return the layer to densify, or ``None`` if the scene has no layers.
 
-    Reads the selection and the visible stack order from the Anim Layer editor
-    (see the module docstring for why this uses the UI). The adjustment layer is
-    the last selected layer; everything beneath it in the stack — minus any
-    locked layers — becomes the set to composite motion from.
-
-    Returns:
-        ``(adjustment_layer, layers_below)``, or ``None`` if there is no anim
-        layer root in the scene.
+    That is the selected layer. With several selected it is the topmost of
+    them in the stack, and with none selected it is the top of the stack.
     """
-    root_layer = cmds.animLayer(query=True, root=True)
-    if not root_layer:
+    layers = stack_order()
+    if not layers:
         return None
-
-    # The editor's treeView reports layers in their true visible stack order.
-    all_layers = cmds.treeView(ANIM_LAYER_TREEVIEW, q=True, children=True)
-
-    selected_layers = get_selected_animlayers()
-
-    layers_below = all_layers[:]  # Copy the list
-    if len(selected_layers) == 0 or selected_layers[-1] == "BaseAnimation":
-        # Nothing useful selected: treat the top layer as the adjustment layer.
-        selected_layers = [layers_below.pop()]
-    elif len(selected_layers) == 1:
-        index = layers_below.index(selected_layers[-1])
-        del layers_below[index:]
-    elif len(selected_layers) > 1:
-        layers_below = selected_layers[:-1]
-
-    adjustment_layer = selected_layers[-1]
-
-    if not isinstance(layers_below, list):
-        layers_below = [layers_below]
-
-    # Locked layers can't be authored against, so drop them.
-    locked = [layer for layer in layers_below if cmds.animLayer(layer, q=True, lock=True)]
-    for layer in locked:
-        layers_below.remove(layer)
-
-    log.debug(
-        "Adjustment layer: %s | layers below: %s | locked (skipped): %s",
-        adjustment_layer, layers_below, locked,
-    )
-
-    return adjustment_layer, layers_below
-
-
-def filter_layers_by_objects(layers: List[str], objects: List[str]) -> List[str]:
-    """Remove layers that don't contain any of the target objects."""
-    root_layer = cmds.animLayer(q=True, root=True)
-    filtered = []
-
-    for layer in layers:
-        if layer == root_layer:
-            filtered.append(layer)
-            continue
-
-        layer_members = cmds.animLayer(layer, q=True, attribute=True) or []
-        layer_objects = set(x.split(".")[0] for x in layer_members)
-
-        if bool(layer_objects & set(objects)):
-            filtered.append(layer)
-        else:
-            log.debug("Skipping layer %s - no target objects", layer)
-
-    return filtered
+    selected = [layer for layer in layers if cmds.animLayer(layer, query=True, selected=True)]
+    adjustment_layer = (selected or layers)[-1]
+    log.debug("Adjustment layer: %s (selected: %s)", adjustment_layer, selected)
+    return adjustment_layer
 
 
 class LayerCurve(NamedTuple):

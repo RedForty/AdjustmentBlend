@@ -16,12 +16,10 @@ adjustment layer::
     import adjustment_blend
     adjustment_blend.run(smart=True)
 
-Or drive it explicitly (headless / pipeline / tools), supplying the layer
-context yourself instead of reading it from the Anim Layer editor::
+Or name the layer and the objects yourself (headless / pipeline / tools)::
 
     adjustment_blend.run(
         adjustment_layer="AnimLayer1",
-        layers_below=["BaseAnimation"],
         objects=["pCube1"],
     )
 
@@ -31,7 +29,7 @@ dependency, so it can be unit tested and reused anywhere.
 
 from __future__ import annotations
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 # The pure core is always importable (no Maya required) so tests and tooling
 # can use it directly.

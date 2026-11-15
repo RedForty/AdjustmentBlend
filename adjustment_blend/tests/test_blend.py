@@ -8,6 +8,7 @@ is keyed on every frame, the offset arrives in step with the original motion, an
 import maya.cmds as cmds
 
 import adjustment_blend
+from adjustment_blend import maya_scene
 
 from . import common, scenes
 from .common import Failure
@@ -45,6 +46,9 @@ def run(report):
     check("a half-weight layer below counts half", lambda: _other_layer("below", weight=0.5))
     check("an override layer below replaces the base", lambda: _other_layer("below", override=True))
     check("a layer above is ignored", lambda: _other_layer("above"))
+    check("with two layers selected, the upper one is blended", _two_layers_selected)
+    check("with no layer selected, the top one is blended", _no_layer_selected)
+    check("the stack order follows moved and nested layers", _stack_order)
     check("a control with no motion is left alone", _static)
     check("one key on the layer is not enough", _one_key)
     check("a control that is not on the layer is refused", _not_a_member)
@@ -196,9 +200,8 @@ def _two_controls():
 # =============================================================================
 
 def _blend_all(made, **options):
-    root = cmds.animLayer(query=True, root=True)
     controls = [scene.control for scene in made]
-    if not adjustment_blend.run(made[0].layer, [root], controls, **options):
+    if not adjustment_blend.run(made[0].layer, controls, **options):
         raise Failure("run() returned False")
 
 
@@ -275,6 +278,64 @@ def _other_layer(position, **settings):
 
 
 # =============================================================================
+# Which layer is the adjustment layer, when run() is not told
+# =============================================================================
+
+def _select_layers(*names):
+    for each in cmds.ls(type="animLayer"):
+        cmds.animLayer(each, edit=True, selected=each in names, preferred=False)
+
+
+def _two_layers_selected():
+    """The names are chosen so that sorting by name would pick the lower layer."""
+    control = scenes.performer()
+    lower = scenes.adjustment_by_plug({control + ".translateX": {0: 0.0, 40: 2.0}}, name="Zeta")[0]
+    upper = scenes.adjustment_by_plug({control + ".translateX": {0: 0.0, 40: 6.0}}, name="Alpha")[0]
+    _select_layers("Zeta", "Alpha")
+    if maya_scene.discover_adjustment_layer() != "Alpha":
+        raise Failure("picked %s, and Alpha is the upper of the two" % maya_scene.discover_adjustment_layer())
+    if not adjustment_blend.run(objects=[control]):
+        raise Failure("run() returned False")
+    common.expect_follows(upper, control, "translateX", above=[])
+    common.expect_sparse(lower, control, "translateX")
+    return "Alpha is blended and Zeta, below it, keeps its two keys"
+
+
+def _no_layer_selected():
+    scene = scenes.with_other_layer("below")
+    _select_layers()
+    cmds.select(scene.controls)
+    if not adjustment_blend.run():
+        raise Failure("run() returned False")
+    common.expect_follows(scene, scene.control, "translateX")
+    return "%s, the top of the stack, is blended" % scene.layer
+
+
+def _stack_order():
+    control = scenes.performer()
+    for name in ("Zeta", "Alpha", "Mid", "Top"):
+        scenes.layer(name, [control + ".translateX"])
+    steps = [
+        ("as created", None, ["Zeta", "Alpha", "Mid", "Top"]),
+        ("Top moved to the bottom", lambda: cmds.animLayer("Top", edit=True, moveLayerBefore="Zeta"),
+         ["Top", "Zeta", "Alpha", "Mid"]),
+        ("Alpha put inside a group layer on top", lambda: (cmds.animLayer("Group"),
+                                                         cmds.animLayer("Alpha", edit=True, parent="Group")),
+         ["Top", "Zeta", "Mid", "Group", "Alpha"]),
+    ]
+    for name, change, want in steps:
+        if change:
+            change()
+        got = maya_scene.stack_order()
+        if got != want:
+            raise Failure("%s: the stack reads %s, not %s" % (name, got, want))
+    _select_layers("Zeta", "Top", "Mid")
+    if maya_scene.discover_adjustment_layer() != "Mid":
+        raise Failure("with Zeta, Top and Mid selected it picked %s, not Mid" % maya_scene.discover_adjustment_layer())
+    return "bottom to top after a move and a nesting; the upper of three selected layers is Mid"
+
+
+# =============================================================================
 # Nothing to do
 # =============================================================================
 
@@ -301,8 +362,7 @@ def _one_key():
 def _not_a_member():
     scene = scenes.move_hold_move_hold()
     bystander = scenes.performer("bystander")
-    root = cmds.animLayer(query=True, root=True)
-    if adjustment_blend.run(scene.layer, [root], [bystander]):
+    if adjustment_blend.run(scene.layer, [bystander]):
         raise Failure("run() returned True for a control that is not on the layer")
     for attr in scene.keys:
         common.expect_sparse(scene, scene.control, attr)
