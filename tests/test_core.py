@@ -57,6 +57,21 @@ def test_is_equal_detects_motion():
 
 
 # ---------------------------------------------------------------------------
+# is_still
+# ---------------------------------------------------------------------------
+
+def test_is_still_ignores_rounding_noise():
+    assert core.is_still([])
+    assert core.is_still([0.0, 0.0, 0.0])
+    assert core.is_still([0.0, 3e-10, 8e-10, 1e-9])
+
+
+def test_is_still_detects_motion():
+    assert not core.is_still([0.0, 0.0, 0.01])
+    assert not core.is_still([0.0, 2.0, 2.0, 2.0])   # constant speed is motion
+
+
+# ---------------------------------------------------------------------------
 # get_velocity_graph
 # ---------------------------------------------------------------------------
 
@@ -230,6 +245,14 @@ def test_distribute_hold_in_first_segment_keeps_the_middle_key():
     adjustment = [0.0, 0.0, 0.0, 0.0, 10.0, 0.0, 0.0, 0.0, 20.0]
     out = core.distribute_adjustment(velocity, adjustment, [(0.0, 4.0), (4.0, 8.0)], calc)
     assert [round(v, 6) for v in out] == [0.0, 2.5, 5.0, 7.5, 10.0, 12.5, 15.0, 17.5, 20.0]
+
+
+def test_distribute_noise_on_a_still_segment_is_not_followed():
+    # A still channel with rounding noise: following the noise would hand out
+    # the change in uneven steps. It must spread evenly instead.
+    velocity = [0.0, 9e-10, 1e-10, 7e-10, 2e-10]
+    out = _single_segment(velocity, 0.0, 40.0)
+    assert [round(v, 6) for v in out] == [0.0, 10.0, 20.0, 30.0, 40.0]
 
 
 def test_segment_weights_sum_to_100_and_skip_the_first_sample():

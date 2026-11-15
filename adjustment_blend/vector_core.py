@@ -24,7 +24,7 @@ from __future__ import annotations
 import math
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from .core import distribute_adjustment, is_equal
+from .core import distribute_adjustment, is_still
 
 # Maya rotateOrder enum -> axis order string.
 ROTATE_ORDER_NAMES = {0: "xyz", 1: "yzx", 2: "zxy", 3: "xzy", 4: "yxz", 5: "zyx"}
@@ -155,7 +155,7 @@ def hottest_group(speeds: Dict[str, Sequence[float]], exclude: str = "") -> Opti
     """
     best: Optional[Tuple[str, list, float]] = None
     for name, speed in speeds.items():
-        if name == exclude or is_equal(speed):
+        if name == exclude or is_still(speed):
             continue
         peak = max(speed)
         if best is None or peak > best[2]:

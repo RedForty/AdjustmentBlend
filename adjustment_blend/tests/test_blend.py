@@ -30,6 +30,9 @@ def run(report):
     check("rotation offset on a translating control, scalar smart", lambda: _cross_channel("scalar", True))
     check("rotation offset on a translating control, vector normal", _cross_channel_vector_normal)
     check("rotation offset on a translating control, vector smart", lambda: _cross_channel("vector", True))
+    check("baked keys with rounding noise, scalar normal", _baked_scalar_normal)
+    check("baked keys with rounding noise, scalar smart", lambda: _baked("scalar"))
+    check("baked keys with rounding noise, vector", lambda: _baked("vector"))
     check("scale offset on a scaling control", _scale)
     check("two controls that hold at different times", _two_controls)
     check("another layer below adds motion", lambda: _other_layer("below"))
@@ -130,6 +133,33 @@ def _cross_channel(signal, smart):
         common.expect_follows(scene, scene.control, attr, source="translateX", tolerance=VECTOR_TOLERANCE)
         common.expect_holds(scene.control, attr, tolerance=VECTOR_TOLERANCE)
     return "the rotation follows the translation and holds"
+
+
+# =============================================================================
+# Baked animation: a key on every frame, and noise on the axes that do not move
+# =============================================================================
+
+def _baked_scalar_normal():
+    scene = scenes.baked_performer()
+    if not common.blend(scene):
+        raise Failure("run() returned False")
+    for attr in MOVING:
+        common.expect_follows(scene, scene.control, attr)
+        common.expect_holds(scene.control, attr)
+    for attr in STILL:
+        common.expect_sparse(scene, scene.control, attr)
+    return "the noise on the still axes is not taken for motion: they keep their two keys"
+
+
+def _baked(signal):
+    scene = scenes.baked_performer()
+    if not common.blend(scene, signal=signal, smart=True):
+        raise Failure("run() returned False")
+    for attr in MOVING + STILL:
+        source = "translateX" if attr.startswith("translate") else "rotateY"
+        common.expect_follows(scene, scene.control, attr, source=source, tolerance=VECTOR_TOLERANCE)
+        common.expect_holds(scene.control, attr, tolerance=VECTOR_TOLERANCE)
+    return "the still axes follow the moving axis of their channel, and all six hold"
 
 
 # =============================================================================

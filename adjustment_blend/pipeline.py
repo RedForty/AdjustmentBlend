@@ -66,7 +66,7 @@ class AttributeData:
         """True if the composite velocity carries any motion to blend against."""
         if not self.composite_velocity:
             return False
-        return not core.is_equal(self.composite_velocity)
+        return not core.is_still(self.composite_velocity)
 
 
 # =============================================================================
@@ -295,7 +295,7 @@ def apply_smart_fallbacks(
         if not fallback_velocity:
             fallback_velocity, fallback_source = _find_channel_fallback(attr_data, lookup, stack)
 
-        if fallback_velocity and not core.is_equal(fallback_velocity):
+        if fallback_velocity and not core.is_still(fallback_velocity):
             attr_data.composite_velocity = fallback_velocity
             attr_data.velocity_source = fallback_source
             log.debug("Substituting %s velocity for %s", fallback_source, attr_data.attr)
@@ -331,7 +331,7 @@ def _find_axis_fallback(
         elif composite_values:
             velocity = core.get_velocity_graph(composite_values)
 
-        if velocity and not core.is_equal(velocity) and composite_values:
+        if velocity and not core.is_still(velocity) and composite_values:
             candidate_delta = abs(composite_values[-1] - composite_values[0])
             candidates.append((other_attr, velocity, candidate_delta))
 
@@ -373,7 +373,7 @@ def _find_channel_fallback(
                 composite_values = stack.base_values(attr_data.obj, other_attr)
                 velocity = core.get_velocity_graph(composite_values) if composite_values else None
 
-            if velocity and not core.is_equal(velocity):
+            if velocity and not core.is_still(velocity):
                 max_vel = max(velocity)
                 if max_vel > best_max_vel:
                     best_max_vel = max_vel
@@ -532,12 +532,12 @@ def _run_vector(context: AdjustmentContext, *, smart: bool, apply: bool) -> bool
         source = group
 
         # Nothing on this group's own motion: optionally borrow another channel.
-        if speed is None or core.is_equal(speed):
+        if speed is None or core.is_still(speed):
             borrow = vector_core.hottest_group(speeds, exclude=group) if smart else None
             if borrow:
                 source, speed = borrow
 
-        if speed is None or core.is_equal(speed):
+        if speed is None or core.is_still(speed):
             # No motion to ride anywhere — leave the attr sparse (Maya's own
             # linear blend already covers a motionless offset).
             left_sparse.append(ad.full_attr)

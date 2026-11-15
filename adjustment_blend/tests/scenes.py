@@ -143,6 +143,24 @@ def two_performers():
     return adjustment([first, second], {"translateX": 6.0, "rotateY": 20.0})
 
 
+def baked_performer(noise=1e-9, seed=3):
+    """The standard case after a bake: a key on every frame of every axis, with rounding noise.
+
+    The four axes that do not move are keyed at their rest value plus or minus the noise, as baked
+    and imported animation is. The offsets are the same as in move_hold_move_hold().
+    """
+    control = performer()
+    rng = random.Random(seed)
+    attrs = ["translateX", "translateY", "translateZ", "rotateX", "rotateY", "rotateZ"]
+    baked = {attr: [cmds.getAttr("%s.%s" % (control, attr), time=frame) for frame in range(START, END + 1)]
+             for attr in attrs}
+    for attr in attrs:
+        for frame, value in zip(range(START, END + 1), baked[attr]):
+            cmds.setKeyframe(control, attribute=attr, time=frame, value=value + rng.uniform(-noise, noise))
+    return adjustment([control], {"translateX": 6.0, "translateY": 4.0, "translateZ": -3.0,
+                                  "rotateX": 15.0, "rotateY": 20.0, "rotateZ": -10.0})
+
+
 def static_performer():
     """A control with no animation below the adjustment layer."""
     control = cmds.polyCube(name="statue", constructionHistory=False)[0]

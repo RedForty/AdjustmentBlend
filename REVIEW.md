@@ -17,7 +17,6 @@ Size is my guess at the work: small is under an hour, medium is an afternoon.
 | ID | Severity | Item | Size |
 |---|---|---|---|
 | AB-02 | High | Key times from every control and attribute are merged | medium |
-| AB-03 | High | Float noise on a still channel defeats the blend | small |
 | AB-04 | Medium | With two layers selected, name order picks the adjustment layer | small |
 | AB-05 | Medium | `layers_below` does nothing | small |
 | AB-06 | Medium | A failed run reads as "nothing to process" | small |
@@ -44,23 +43,6 @@ Measured:
 The existing check `blend, two controls that hold at different times` does not catch this because both controls have the same key times.
 
 Fix: build the spans per curve from that curve's own keys. AB-07 is the same change seen from the speed side.
-
-### AB-03 High. Float noise on a still channel defeats the blend
-
-Where: `core.py:51-57`.
-
-`is_equal` calls a channel still only when every sample is bit-for-bit the same. Baked and mocap keys on a still channel rarely are.
-
-Measured on translateY, still at 2.0, with a 0 to 4.0 offset:
-
-| Keys below | Mode | Result |
-|---|---|---|
-| exact | Normal | left sparse, as intended |
-| exact | Smart | follows translateX, moves 0.000 in the 10 to 20 hold |
-| 1e-9 noise | Normal | follows the noise, moves 0.909 in the hold |
-| 1e-9 noise | Smart | same as Normal, never borrows |
-
-Fix: call a channel still when its total travel over the range is under a threshold. I'd start at 1e-6 in UI units, but the right number depends on your data, so try it on a real baked shot. Add a check with noisy keys to `adjustment_blend/tests/test_blend.py`.
 
 ### AB-04 Medium. With two layers selected, name order picks the adjustment layer
 
@@ -161,20 +143,20 @@ Fix: keep the borrowed speed in a separate field. Not needed if AB-10 removes Sc
 
 | Item | Outcome |
 |---|---|
+| Float noise on a still channel defeated the blend, was AB-03 | Fixed. `core.is_still` treats steps up to `STILL_TOLERANCE`, 1e-6 per frame, as no motion. 3 scene checks on baked keys with noise and 3 pytest checks |
 | A key between the first and last gave a pop or overwrote a key, was AB-01 | Fixed in `core.segment_weights`. A span no longer counts the motion that arrived at its first key, and a span with no motion below spreads its change evenly. 4 scene checks and 5 pytest checks |
 | Two copies of the distribution loop, was AB-09 | Fixed. `distribute_by_speed` calls `core.distribute_adjustment` |
 | `LayerStack` did not compute the layers below | Fixed. Rewritten, 21 checks in `adjustment_blend/tests/test_layers.py` |
 | Cost grew with the square of the number of controls | Fixed. One shared `LayerStack` per run |
 | `run()` from a script gave one undo step per key | Fixed. `adjustmentBlendKeys` makes a run one step, 20 checks in `adjustment_blend/tests/test_keys.py` |
-| No scene tests | Fixed. 65 checks, `mayapy adjustment_blend/tests/run.py`. The review said there were no tests at all. That was wrong: `tests/` already had 39 pytest checks for the pure core, now 43 |
+| No scene tests | Fixed. 68 checks, `mayapy adjustment_blend/tests/run.py`. The review said there were no tests at all. That was wrong: `tests/` already had 39 pytest checks for the pure core, now 46 |
 | Dead code in the old `maya_layers.py` | Gone with the rewrite |
 | Move the undo chunk into `run()` | Not needed after the plug-in |
 | Replace `maya_layers.py` with a `getAttr(time=)` sampler | Withdrawn. The spike measured it about 250 times slower per sample |
 
 ## Order I'd do them in
 
-1. AB-03. Small, and it decides whether the tool works on baked data at all.
-2. AB-07 with AB-02 and AB-08. One change: walk the layer's curves, spans per curve.
-3. AB-05, then AB-04. Both need you to say what layer selection should mean.
-4. AB-06, AB-12, AB-13.
-5. AB-10 once you have an opinion on Vector.
+1. AB-07 with AB-02 and AB-08. One change: walk the layer's curves, spans per curve.
+2. AB-05, then AB-04. Both need you to say what layer selection should mean.
+3. AB-06, AB-12, AB-13.
+4. AB-10 once you have an opinion on Vector.

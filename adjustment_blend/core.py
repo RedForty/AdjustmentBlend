@@ -44,6 +44,14 @@ def normalize_attr_name(attr: str) -> str:
     return SHORT_TO_LONG.get(attr, attr)
 
 
+# A channel counts as still when no frame-to-frame step is larger than this,
+# in the channel's own units (UI units, degrees, radians for the vector signal).
+# Baked and imported keys on a channel that does not move still differ by
+# rounding noise, around 1e-9 or less. Followed as if it were motion, that noise
+# spreads an offset straight through a hold.
+STILL_TOLERANCE = 1e-6
+
+
 # =============================================================================
 # Small numeric helpers
 # =============================================================================
@@ -51,10 +59,19 @@ def normalize_attr_name(attr: str) -> str:
 def is_equal(values: Sequence[float]) -> bool:
     """Return ``True`` if every element is identical (or the list is empty).
 
-    Used throughout to detect "flat" graphs that carry no motion and therefore
-    cannot drive a velocity-matched distribution.
+    Used on the adjustment curve itself, to skip one that changes nothing. For
+    "is the motion below still?" use :func:`is_still`, which allows for noise.
     """
     return not values or list(values).count(values[0]) == len(values)
+
+
+def is_still(speed: Sequence[float], tolerance: float = STILL_TOLERANCE) -> bool:
+    """Return ``True`` if a speed graph carries no motion worth following.
+
+    ``speed`` is a graph from :func:`get_velocity_graph` or one of the group
+    speeds. Steps up to ``tolerance`` are rounding noise, not motion.
+    """
+    return not speed or max(speed) <= tolerance
 
 
 def map_from_to(x: float, a: float, b: float, c: float, d: float) -> float:
@@ -152,18 +169,17 @@ def segment_weights(speed: Sequence[float]) -> List[float]:
     keeps the first key's value. Counting it made every segment after the
     first start with a jump.
 
-    A segment with no motion to follow spreads its change evenly. With no
-    share to hand out it would hold the first key's value to the end and
-    overwrite the key that ends it.
+    A segment with no motion to follow (see :func:`is_still`) spreads its
+    change evenly. With no share to hand out it would hold the first key's
+    value to the end and overwrite the key that ends it.
     """
     rest = speed[1:]
     if not rest:
         return [0.0] * len(speed)
-    total = sum(rest)
-    if total > 0.0:
-        scale = 100.0 / total
-        return [0.0] + [sample * scale for sample in rest]
-    return [0.0] + [100.0 / len(rest)] * len(rest)
+    if is_still(rest):
+        return [0.0] + [100.0 / len(rest)] * len(rest)
+    scale = 100.0 / sum(rest)
+    return [0.0] + [sample * scale for sample in rest]
 
 
 def distribute_adjustment(
