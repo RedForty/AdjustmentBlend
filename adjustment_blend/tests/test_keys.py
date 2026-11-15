@@ -4,6 +4,8 @@ maya_keys.write_keys must leave a curve as cmds.setKeyframe on every frame would
 adjustmentBlendKeys command must make the whole write one undo step that restores the artist's
 keys exactly, tangents included.
 """
+import maya.api.OpenMaya as om
+import maya.api.OpenMayaAnim as oma
 import maya.cmds as cmds
 
 import adjustment_blend
@@ -26,6 +28,7 @@ def run(report):
         check("same keys as cmds.setKeyframe, %s" % name, _same_as_setkeyframe(shape))
         check("undo and redo, %s" % name, _undo_redo(shape))
     check("an artist's key keeps its tangent lock and its breakdown mark", _keeps_lock_and_breakdown)
+    check("Maya hears of keys added between keys that keep their value", _tells_maya)
     check("a blend is one undo step", _blend_is_one_undo)
     check("two blends take two undos", _two_blends)
     check("values in meters and radians", _other_units)
@@ -196,6 +199,34 @@ def _keeps_lock_and_breakdown():
     if abs(got - VALUES[20]) > TOLERANCE:
         raise Failure("the breakdown at frame 20 holds %.4f, not %.4f" % (got, VALUES[20]))
     return "both kept, with the new values"
+
+
+def _tells_maya():
+    """The Graph Editor redraws a curve when Maya sends its "curve edited" message.
+
+    A blend leaves the artist's keys at their values and adds keys between them, and
+    MFnAnimCurve.addKeys sends no message of its own.
+    """
+    scene, curves = _curves(_default)
+    writes = [(curve, FRAMES, [cmds.keyframe(curve, query=True, eval=True, time=(frame,))[0]
+                               for frame in FRAMES]) for curve in curves]
+    heard = set()
+
+    def edited(nodes, _data):
+        heard.update(om.MFnDependencyNode(node).name() for node in nodes)
+
+    callback = oma.MAnimMessage.addAnimCurveEditedCallback(edited)
+    try:
+        for step, action in (("the write", lambda: maya_keys.write_keys(writes)),
+                             ("undo", cmds.undo), ("redo", cmds.redo)):
+            heard.clear()
+            action()
+            missing = sorted(set(curves) - heard)
+            if missing:
+                raise Failure("no curve edited message after %s for %s" % (step, ", ".join(missing)))
+    finally:
+        om.MMessage.removeCallback(callback)
+    return "a message for each curve after the write, undo and redo"
 
 
 def _layer_snapshots(scene):
